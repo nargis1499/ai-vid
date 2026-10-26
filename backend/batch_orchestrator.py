@@ -341,10 +341,10 @@ class BatchOrchestrator:
         except Exception as exc:
             steps["seo"]="failed";result["error"]=f"SEO generation failed: {exc}"
             report(87,"seo",result["error"],{"seo":"failed"});return result
-        report(88,"thumbnail","Creating a branded thumbnail from the scene visuals and title graphics…")
+        report(88,"thumbnail","Building a template-matched thumbnail from scene visuals and script subjects…")
         thumbnail_background=next((item.get("path") for item in media if item and item.get("type")=="image"),None)
         try:
-            thumb=self.thumbnails.generate(seo,title,serial,background_path=thumbnail_background,scenes=scenes,media_items=media)
+            thumb=self.thumbnails.generate(seo,title,serial,background_path=thumbnail_background,scenes=scenes,media_items=media,image_generator=self.images,video_fetcher=self.fetcher)
             self._check_cancel(batch_id)
             result["thumbnail_path"]=thumb;steps["thumbnail"]="done"
             report(92,"thumbnail","Thumbnail artwork ready",{"thumbnail":"done"})

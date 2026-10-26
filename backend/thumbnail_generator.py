@@ -99,12 +99,16 @@ def _clean_label(value: str, max_words: int = 3) -> str:
 class ThumbnailGenerator:
     def generate(self, seo: dict, title: str, index: int,
                  background_path: str | None = None, scenes: list | None = None,
-                 media_items: list | None = None) -> str:
-        """Build a cinematic multi-panel thumbnail from the selected scene media."""
+                 media_items: list | None = None, image_generator=None,
+                 video_fetcher=None) -> str:
+        """Build the reference-inspired cover from relevant script and stock visuals."""
         path = DIRS["thumbnails"] / f"thumb_{index}.jpg"
         scenes = scenes if isinstance(scenes, list) else []
         media_items = media_items if isinstance(media_items, list) else []
-        panels = self._load_panels(seo, title, index, scenes, media_items)
+        panels = self._subject_panels(seo, title, index, scenes, media_items,
+                                      image_generator, video_fetcher)
+        if len(panels) < 2:
+            panels = self._load_panels(seo, title, index, scenes, media_items)
         if not panels and background_path:
             image = self._load_image(background_path)
             if image is not None:
@@ -133,6 +137,94 @@ class ThumbnailGenerator:
             canvas = canvas.resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
         canvas.save(path, format="JPEG", quality=94, optimize=True)
         return str(path)
+
+    def _subject_panels(self, seo, title, index, scenes, media_items,
+                        image_generator, video_fetcher):
+        """Create one image panel per named subject when a title promises a list or comparison."""
+        subjects = self._headline_subjects(seo, title)
+        if len(subjects) < 2:
+            return []
+        panels = []
+        used_scene_indices = set()
+        for subject_index, subject in enumerate(subjects[:MAX_PANELS]):
+            scene_index = self._matching_scene(subject, scenes, media_items, used_scene_indices)
+            image = None
+            if scene_index is not None:
+                item = media_items[scene_index]
+                image = self._media_image(item, index * 10 + subject_index)
+                used_scene_indices.add(scene_index)
+            if image is None and image_generator is not None:
+                query_context = self._query_context(title)
+                query = " ".join(part for part in (subject, query_context) if part).strip()
+                request_scene = {
+                    "search_keywords": query,
+                    "visual_description": f"Clear, authentic photo of {query}",
+                    "text_overlay": "",
+                }
+                try:
+                    image_path = image_generator.generate_scene_image(request_scene, index * 100 + 70 + subject_index)
+                    if getattr(image_generator, "last_source", None) in {"Pexels", "Pixabay"}:
+                        image = self._load_image(image_path)
+                except Exception as exc:
+                    print(f"[thumbnail] Stock still search failed for {subject}: {exc}")
+            if image is None and video_fetcher is not None:
+                query_context = self._query_context(title)
+                query = " ".join(part for part in (subject, query_context) if part).strip()
+                try:
+                    clip_path = video_fetcher.fetch_clip(query, index * 100 + 70 + subject_index, min_dur=3)
+                    if clip_path:
+                        image = self._media_image({"type": "video", "path": clip_path}, index * 10 + 5 + subject_index)
+                except Exception as exc:
+                    print(f"[thumbnail] Stock clip search failed for {subject}: {exc}")
+            if image is not None:
+                panels.append((image, {"label": subject}, scene_index if scene_index is not None else subject_index))
+        return panels
+
+    @staticmethod
+    def _headline_subjects(seo, title):
+        headline = str(seo.get("thumbnail_text") or title or "").strip()
+        headline = re.sub(r"^\s*(?:top\s*)?\d{1,2}\b[\s:.,-]*", "", headline, flags=re.I)
+        segments = re.split(r"\s*(?:&|\b(?:and|versus|vs\.?)\b|[,|/])\s*", headline, flags=re.I)
+        subjects = []
+        for segment in segments:
+            label = _clean_label(segment, max_words=4)
+            if label and label not in {"TOP", "THE STORY", "THE WORLD"} and label not in subjects:
+                subjects.append(label)
+        if len(subjects) < 2:
+            labels = seo.get("thumbnail_panels") if isinstance(seo.get("thumbnail_panels"), list) else []
+            subjects = list(dict.fromkeys(_clean_label(label, max_words=3) for label in labels if _clean_label(label, max_words=3)))
+        if len(subjects) > MAX_PANELS:
+            picks = [round(i * (len(subjects) - 1) / (MAX_PANELS - 1)) for i in range(MAX_PANELS)]
+            subjects = [subjects[i] for i in picks]
+        return subjects if len(subjects) > 1 else []
+
+    @staticmethod
+    def _query_context(title):
+        stop = {"top", "best", "worst", "most", "beautiful", "animals", "animal", "wildlife",
+                "city", "cities", "ways", "things", "reasons", "in", "of", "the", "a", "an", "and", "to"}
+        words = re.findall(r"[\w'-]+", str(title or ""))
+        return " ".join(word for word in words if word.casefold() not in stop and not word.isdigit())[:48]
+
+    @staticmethod
+    def _matching_scene(subject, scenes, media_items, used_indices):
+        subject_words = {word.casefold() for word in re.findall(r"[\w'-]+", subject)}
+        if not subject_words:
+            return None
+        best = None
+        best_score = 0
+        for scene_index, scene in enumerate(scenes):
+            if scene_index in used_indices or scene_index >= len(media_items) or not isinstance(scene, dict):
+                continue
+            if not media_items[scene_index]:
+                continue
+            source_words = {word.casefold() for word in re.findall(
+                r"[\w'-]+", " ".join(str(scene.get(key) or "") for key in ("search_keywords", "visual_description", "narration"))
+            )}
+            matched = subject_words & source_words
+            score = len(matched) / len(subject_words)
+            if score > best_score:
+                best, best_score = scene_index, score
+        return best if best_score >= 0.5 else None
 
     def _load_panels(self, seo, title, index, scenes, media_items):
         available_count = min(len(media_items), len(scenes)) if scenes else len(media_items)
@@ -261,7 +353,10 @@ class ThumbnailGenerator:
             if number:
                 headline = re.sub(rf"^\s*(?:top\s*)?{number.group(0)}\b[\s:,-]*", "", headline, flags=re.I)
         subtitle = str(seo.get("thumbnail_subtitle") or "").strip()
-        if subtitle.casefold() == headline.casefold():
+        animal_context = self._animal_context_subtitle(title)
+        if animal_context:
+            subtitle = animal_context
+        elif subtitle.casefold() == headline.casefold():
             subtitle = ""
         if not subtitle:
             subtitle = self._subtitle_from_title(title, headline)
@@ -331,6 +426,16 @@ class ThumbnailGenerator:
         words = re.findall(r"[\w'-]+", str(title or ""))
         chosen = [word for word in words if word.casefold() not in stop][:4]
         return " ".join(chosen).upper() or "THE BIG STORY"
+
+    @staticmethod
+    def _animal_context_subtitle(title):
+        match = re.search(r"\banimals?\s+(?:in|of)\s+(?:the\s+)?([a-z][a-z '-]*)$", str(title or ""), flags=re.I)
+        if not match:
+            return ""
+        place = match.group(1).strip(" '-").upper()
+        if not place:
+            return ""
+        return f"{place}'S WILD ANIMALS" if re.search(r"\bin\b", str(title), flags=re.I) else f"{place} ANIMALS"
 
     @staticmethod
     def _subtitle_from_title(title, headline):

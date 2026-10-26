@@ -9,7 +9,7 @@ const VIDEO_STEPS=[
  {key:'music',label:'Mix background music',hint:'Add a title-matched instrumental track.'},
  {key:'encoding',label:'Encode final MP4',hint:'Render the selected resolution and frame rate.'},
  {key:'seo',label:'Prepare YouTube metadata',hint:'Generate title, description, tags, and publishing details.'},
- {key:'thumbnail',label:'Create thumbnail',hint:'Design the cover image for the video.'},
+ {key:'thumbnail',label:'Create thumbnail',hint:'Build the template-matched cover from relevant scene visuals and script subjects.'},
  {key:'upload',label:'Publish to YouTube',hint:'Uploads automatically when enabled, or use Publish to YouTube on a completed video.'},
  {key:'finalize',label:'Finish & prepare downloads',hint:'Make the video, thumbnail, and subtitle files available.'}
 ];
