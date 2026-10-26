@@ -3,7 +3,7 @@ import os
 import re
 from pathlib import Path
 
-from common import DIRS
+from common import DIRS, ROOT_DIR
 
 
 class VideoAssembler:
@@ -416,6 +416,31 @@ class VideoAssembler:
 
     @staticmethod
     def _subtitle_font(ImageFont, size):
+        """Load bundled Montserrat SemiBold for burned-in captions, with safe system fallbacks."""
+        montserrat_path = ROOT_DIR / "frontend" / "assets" / "fonts" / "Montserrat-Variable.ttf"
+        if montserrat_path.is_file():
+            try:
+                font = ImageFont.truetype(str(montserrat_path), size=size)
+                axes = font.get_variation_axes()
+                if axes:
+                    values = []
+                    for axis in axes:
+                        name = str(axis.get("name", "")).lower()
+                        if "weight" in name or axis.get("tag") == "wght":
+                            values.append(min(max(600, axis.get("minimum", 600)), axis.get("maximum", 600)))
+                        else:
+                            values.append(axis.get("default", 0))
+                    font.set_variation_by_axes(values)
+                    return font
+                font.set_variation_by_name("SemiBold")
+                return font
+            except (AttributeError, OSError, ValueError):
+                try:
+                    font = ImageFont.truetype(str(montserrat_path), size=size)
+                    font.set_variation_by_name("SemiBold")
+                    return font
+                except (AttributeError, OSError, ValueError):
+                    pass
         for path in (
             r"C:\Windows\Fonts\arialbd.ttf",
             r"C:\Windows\Fonts\segoeuib.ttf",
