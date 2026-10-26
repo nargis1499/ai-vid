@@ -166,9 +166,11 @@ def create_batch():
     except (TypeError,ValueError):return jsonify({"error":"duration must be a number of seconds"}),400
     resolution=str(body.get("resolution","720p")).lower()
     if resolution not in {"720p","1080p"}:return jsonify({"error":"resolution must be 720p or 1080p"}),400
+    voice_speed=str(body.get("voice_speed","medium")).lower()
+    if voice_speed not in {"slow","medium","faster"}:return jsonify({"error":"voice_speed must be slow, medium, or faster"}),400
     niche=str(body.get("niche","General"))[:80];privacy=body.get("privacy",os.getenv("YOUTUBE_PRIVACY_STATUS","private"))
     if privacy not in {"private","unlisted","public"}:return jsonify({"error":"privacy must be private, unlisted, or public"}),400
-    batch_id=orchestrator.start_batch(titles,duration,niche,bool(body.get("auto_upload",False)),privacy,custom_scripts=custom_scripts,resolution=resolution)
+    batch_id=orchestrator.start_batch(titles,duration,niche,bool(body.get("auto_upload",False)),privacy,custom_scripts=custom_scripts,resolution=resolution,voice_speed=voice_speed)
     return jsonify({"batch_id":batch_id,"status":"queued"}),202
 @app.get("/api/batch/status/<batch_id>")
 def batch_status(batch_id):
@@ -176,6 +178,19 @@ def batch_status(batch_id):
     if not state:return jsonify({"error":"Batch not found"}),404
     state["gpu_status"]=_gpu_status()
     return jsonify(state)
+
+@app.post("/api/batch/<batch_id>/stop")
+def stop_batch(batch_id):
+    stopped,message=orchestrator.request_stop(batch_id)
+    return (jsonify({"success":True,"message":message}),202) if stopped else (jsonify({"error":message}),409)
+
+@app.post("/api/batch/<batch_id>/publish/<int:index>")
+def publish_video(batch_id,index):
+    youtube_status=orchestrator.youtube.status()
+    if not youtube_status.get("connected"):
+        return jsonify({"error":"Connect your YouTube channel before publishing."}),409
+    started,message=orchestrator.start_manual_publish(batch_id,index)
+    return (jsonify({"success":True,"message":message}),202) if started else (jsonify({"error":message}),409)
 
 @app.get("/api/gpu/status")
 def gpu_status():

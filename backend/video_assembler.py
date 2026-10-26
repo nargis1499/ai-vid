@@ -15,7 +15,7 @@ class VideoAssembler:
         self.encoding_active = False
         self._nvenc_unavailable_binary = None
 
-    def _encode_video(self, final, path, ffmpeg_binary, allow_nvenc, logger, stage_callback=None):
+    def _encode_video(self, final, path, ffmpeg_binary, allow_nvenc, logger, stage_callback=None, cancel_check=None):
         path = Path(path)
         ffmpeg_key = str(ffmpeg_binary)
         use_nvenc = allow_nvenc and self._nvenc_unavailable_binary != ffmpeg_key
@@ -52,6 +52,8 @@ class VideoAssembler:
                 if stage_callback:stage_callback("encoding",f"MP4 encoding complete using {label}.")
                 return
             except Exception as exc:
+                if cancel_check:
+                    cancel_check()
                 if codec == "h264_nvenc":
                     nvenc_error = exc
                     self._nvenc_unavailable_binary = ffmpeg_key
@@ -74,7 +76,7 @@ class VideoAssembler:
     def create(self, script: dict, media_items: list, audio_paths: list, video_id: str,
                progress_callback=None, video_title: str | None = None,
                resolution: str = "720p", use_nvenc: bool = True,
-               stage_callback=None) -> str:
+               stage_callback=None, cancel_check=None) -> str:
         output_size = {"720p": (1280, 720), "1080p": (1920, 1080)}.get(str(resolution).lower())
         if output_size is None:
             raise ValueError("resolution must be 720p or 1080p")
@@ -120,6 +122,8 @@ class VideoAssembler:
 
                 class AssemblyProgressLogger(ProgressBarLogger):
                     def bars_callback(self, bar, attr, value, old_value=None):
+                        if cancel_check:
+                            cancel_check()
                         if bar == "t" and attr == "index":
                             total = self.bars.get(bar, {}).get("total", 0)
                             if total:
@@ -141,6 +145,8 @@ class VideoAssembler:
             scene_cursor = 0.0
             scenes = script.get("scenes", [])
             for i, item in enumerate(media_items):
+                if cancel_check:
+                    cancel_check()
                 if i >= len(audio_paths) or not audio_paths[i]:
                     raise RuntimeError(f"Narration audio is missing for scene {i+1}; refusing to create a silent video.")
                 if not os.path.isfile(audio_paths[i]) or os.path.getsize(audio_paths[i]) == 0:
@@ -240,7 +246,9 @@ class VideoAssembler:
                 final = final.set_audio(faded_audio)
 
             path = DIRS["videos"] / f"{video_id}.mp4"
-            self._encode_video(final, path, FFMPEG_BINARY, use_nvenc, moviepy_logger, stage_callback)
+            if cancel_check:
+                cancel_check()
+            self._encode_video(final, path, FFMPEG_BINARY, use_nvenc, moviepy_logger, stage_callback, cancel_check)
             if progress_callback:
                 progress_callback(1.0)
             return str(path)

@@ -1,16 +1,16 @@
-const $=s=>document.querySelector(s);const titlesEl=$('#titles');let activeBatch=null,pollTimer=null,toastTimer;
+const $=s=>document.querySelector(s);const titlesEl=$('#titles');let activeBatch=null,pollTimer=null,toastTimer,lastTerminalToastBatch=null;
 const VIDEO_STEPS=[
  {key:'script',label:'Script & scene plan',hint:'Draft narration, review it locally, or revise your custom script.'},
  {key:'images',label:'Find footage & create visuals',hint:'Prefer Pexels’ closest available clip; create a local SDXL fallback only when no usable clip is found.'},
  {key:'clips',label:'Use footage & transitions',hint:'Stock clips provide motion; still fallback visuals use the assembler’s standard transitions.'},
- {key:'audio',label:'Generate voice narration',hint:'Create spoken audio for each scene.'},
+ {key:'audio',label:'Generate voice narration',hint:'Create narration at the selected Slow, Medium, or Faster pace.'},
  {key:'assembly',label:'Assemble scenes & transitions',hint:'Arrange scene timing and apply transitions.'},
  {key:'subtitles',label:'Create captions & SRT',hint:'Time English captions and save the subtitle file.'},
  {key:'music',label:'Mix background music',hint:'Add a title-matched instrumental track.'},
  {key:'encoding',label:'Encode final MP4',hint:'Render the selected resolution and frame rate.'},
  {key:'seo',label:'Prepare YouTube metadata',hint:'Generate title, description, tags, and publishing details.'},
  {key:'thumbnail',label:'Create thumbnail',hint:'Design the cover image for the video.'},
- {key:'upload',label:'Upload to YouTube',hint:'Runs only when automatic publishing is enabled.'},
+ {key:'upload',label:'Publish to YouTube',hint:'Uploads automatically when enabled, or use Publish to YouTube on a completed video.'},
  {key:'finalize',label:'Finish & prepare downloads',hint:'Make completed video and subtitle files available.'}
 ];
 function toast(message){const el=$('#toast');el.textContent=message;el.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),3500)}
@@ -46,7 +46,7 @@ function updateStepDetails(row,video){
 function renderCustomScriptEditors(){const wrap=$('#custom-script-editors');const titles=titlesEl.value.split('\n').map(x=>x.trim()).filter(Boolean);const previous=[...wrap.querySelectorAll('.custom-script-input')].map(input=>input.value);if(!titles.length){wrap.innerHTML='<small class="script-empty-hint">Add video titles above to create a script field for each one.</small>';return}wrap.innerHTML=titles.map((title,i)=>`<label class="custom-script-editor"><span>VIDEO ${String(i+1).padStart(2,'0')} · ${escapeHtml(title)}</span><textarea class="custom-script-input" maxlength="40000" placeholder="Paste the exact narration for this video…">${escapeHtml(previous[i]||'')}</textarea></label>`).join('')}
 titlesEl.addEventListener('input',()=>{const n=titlesEl.value.split('\n').map(x=>x.trim()).filter(Boolean).length;$('#title-count').textContent=`${n} title${n===1?'':'s'}`;if($('#use-custom-script').checked)renderCustomScriptEditors()});
 $('#use-custom-script').addEventListener('change',event=>{const panel=$('#custom-scripts-panel');panel.classList.toggle('hidden',!event.target.checked);if(event.target.checked)renderCustomScriptEditors()});
-$('#generate').addEventListener('click',startBatch);$('#refresh-batches').addEventListener('click',loadHistory);
+$('#generate').addEventListener('click',startBatch);$('#stop-batch').addEventListener('click',stopBatch);$('#video-list').addEventListener('click',handleVideoAction);$('#refresh-batches').addEventListener('click',loadHistory);
 $('#help-button').addEventListener('click',()=>toast('See the setup notes in Settings for local services, keys and FFmpeg.'));
 const openSettings=()=>{loadSettingsForm();$('#settings-dialog').showModal()};$('#settings-button').addEventListener('click',openSettings);$('#open-settings-link').addEventListener('click',event=>{event.preventDefault();openSettings()});
 $('#close-settings').addEventListener('click',()=>$('#settings-dialog').close());
@@ -73,7 +73,7 @@ async function startBatch(){
  }
  const button=$('#generate');button.disabled=true;button.querySelector('span:nth-child(2)').textContent='Starting your batch…';
  try{
-  const payload={titles,duration:Number($('#duration').value),resolution:$('#resolution').value,niche:$('#niche').value,privacy:$('#privacy').value,auto_upload:$('#auto-upload').checked};
+  const payload={titles,duration:Number($('#duration').value),resolution:$('#resolution').value,voice_speed:$('#voice-speed').value,niche:$('#niche').value,privacy:$('#privacy').value,auto_upload:$('#auto-upload').checked};
   if(useCustom)payload.custom_scripts=customScripts;
   const response=await fetch('/api/batch/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   const data=await response.json();if(!response.ok)throw new Error(data.error||'Unable to start batch');
@@ -81,6 +81,17 @@ async function startBatch(){
   $('#video-list').innerHTML=titles.map(makeVideoRow).join('');
   $('#progress-section').scrollIntoView({behavior:'smooth',block:'nearest'});await pollBatch();pollTimer=setInterval(pollBatch,3000)
  }catch(e){toast(e.message)}finally{button.disabled=false;button.querySelector('span:nth-child(2)').textContent='Generate video batch'}
+}
+async function stopBatch(){
+ if(!activeBatch)return;
+ if(!window.confirm('Stop generating this batch? The current operation will be cancelled as soon as possible.'))return;
+ const button=$('#stop-batch');button.disabled=true;button.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Stopping…';
+ try{const response=await fetch(`/api/batch/${encodeURIComponent(activeBatch)}/stop`,{method:'POST'});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not stop the batch');$('#progress-message').textContent=data.message||'Stop requested…';if(!pollTimer)pollTimer=setInterval(pollBatch,1500);await pollBatch()}catch(error){toast(error.message||'Could not stop generation');button.disabled=false;button.innerHTML='<i class="fa-solid fa-stop"></i> Stop generation'}
+}
+async function handleVideoAction(event){
+ const button=event.target.closest('.publish-button');if(!button)return;
+ const index=Number(button.dataset.index);button.disabled=true;button.textContent='Starting publish…';
+ try{const response=await fetch(`/api/batch/${encodeURIComponent(activeBatch)}/publish/${index}`,{method:'POST'});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not publish video');toast('YouTube publishing started.');if(!pollTimer)pollTimer=setInterval(pollBatch,1500);await pollBatch()}catch(error){button.disabled=false;button.textContent='Publish to YouTube';toast(error.message||'Could not publish video')}
 }
 async function pollBatch(){
  if(!activeBatch)return;
@@ -92,18 +103,24 @@ async function pollBatch(){
   $('#done-count').textContent=data.completed||0;
   $('#failed-count').textContent=`${data.failed||0} failed`;
   updateGpuStatus(data.gpu_status||{});
-  $('#progress-title').textContent=data.status==='completed'?'Batch complete':'Creating your videos';
+  const terminal=['completed','cancelled','failed'].includes(data.status);
+  $('#progress-title').textContent=data.status==='completed'?'Batch complete':data.status==='stopping'?'Stopping generation…':data.status==='cancelled'?'Generation stopped':data.status==='failed'?'Batch failed':'Creating your videos';
+  const stopButton=$('#stop-batch');stopButton.classList.toggle('hidden',terminal);stopButton.disabled=data.status==='stopping';stopButton.innerHTML=data.status==='stopping'?'<i class="fa-solid fa-spinner fa-spin"></i> Stopping…':'<i class="fa-solid fa-stop"></i> Stop generation';
   const activeVideo=(data.videos||[]).find(video=>video.status==='processing');
   if(data.status==='completed')$('#progress-message').textContent='All generation steps have finished.';
+  else if(data.status==='cancelled')$('#progress-message').textContent='Generation was stopped. Completed videos are still available below.';
+  else if(data.status==='failed')$('#progress-message').textContent=data.error||'The batch stopped because of an unexpected error.';
+  else if(data.status==='stopping')$('#progress-message').textContent='Stop requested; cancelling the current operation…';
   else if(activeVideo)$('#progress-message').textContent=`${activeVideo.title}: ${activeVideo.progress_message||activeVideo.current_stage} · ${activeVideo.progress||0}%`;
   else $('#progress-message').textContent=`Waiting to process ${data.total} video${data.total===1?'':'s'}…`;
+  $('#failed-count').textContent=`${data.failed||0} failed${data.cancelled?` · ${data.cancelled} stopped`:''}`;
   $('#batch-status').innerHTML=`<span class="status-dot ${data.status==='completed'?'green':''}"></span> ${escapeHtml(String(data.status).toUpperCase())}`;
   data.videos.forEach((video,index)=>{
    const row=$(`.video-row[data-index="${index}"]`);
    if(!row)return;
    const state=video.status||'waiting';
    const pct=state==='done'?100:Number(video.progress||0);
-   const message=state==='processing'?(video.progress_message||stepsLabel(video.steps)):state==='done'?(video.video_encoder?`Finished · ${video.video_encoder}`:'Finished processing')+(video.music_warning?' · music unavailable':'')+(video.voice_warning?` · ${video.voice_fallback_engine||'TTS'} fallback used`:''):state==='failed'?(video.error||video.upload_error||'Something went wrong'):'Waiting to start';
+   const message=state==='processing'?(video.progress_message||stepsLabel(video.steps)):state==='done'?(video.video_encoder?`Finished · ${video.video_encoder}`:'Finished processing')+(video.music_warning?' · music unavailable':'')+(video.voice_warning?` · ${video.voice_fallback_engine||'TTS'} fallback used`:''):state==='failed'?(video.error||video.upload_error||'Something went wrong'):state==='cancelled'?'Stopped by user.':'Waiting to start';
    row.querySelector('.video-progress-message').textContent=state==='processing'?`${message} · video ${pct}%`:message;
    const progressFill=row.querySelector('.video-progress-fill');
    progressFill.style.width=`${pct}%`;
@@ -126,9 +143,16 @@ async function pollBatch(){
    }
    if(video.video_path&&!row.querySelector('.video-download')){const link=document.createElement('a');link.href=`/api/video/${encodeURIComponent(activeBatch)}/${index}`;link.textContent='Download video';link.className='video-download';link.setAttribute('download','');row.querySelector('b').append(' ',link)}
    if(video.subtitle_path&&!row.querySelector('.subtitle-download')){const link=document.createElement('a');link.href=`/api/subtitles/${encodeURIComponent(activeBatch)}/${index}`;link.textContent='Subtitles (.srt)';link.className='subtitle-download';link.setAttribute('download','');row.querySelector('b').append(' ',link)}
+   let publishButton=row.querySelector('.publish-button'),publishError=row.querySelector('.publish-error');
+   if(data.auto_upload===false&&video.status==='done'&&video.video_path&&!video.youtube_url){
+    if(!publishButton){publishButton=document.createElement('button');publishButton.type='button';publishButton.className='publish-button';publishButton.dataset.index=String(index);row.querySelector('.video-row-main').append(publishButton)}
+    const uploading=video.upload_status==='uploading';publishButton.disabled=uploading;publishButton.textContent=uploading?`Publishing… ${video.upload_progress||0}%`:video.upload_status==='failed'?'Retry YouTube publish':'Publish to YouTube';
+    if(video.upload_error){if(!publishError){publishError=document.createElement('small');publishError.className='publish-error';row.querySelector('.video-row-main').append(publishError)}publishError.textContent=video.upload_error}else if(publishError)publishError.remove();
+   }else{if(publishButton)publishButton.remove();if(publishError)publishError.remove()}
    if(video.youtube_url&&!row.querySelector('.youtube-link')){const link=document.createElement('a');link.href=video.youtube_url;link.target='_blank';link.rel='noopener';link.className='youtube-link';link.innerHTML='<i class="fa-brands fa-youtube"></i> View';badge.append(link)}
   });
-  if(data.status==='completed'){clearInterval(pollTimer);pollTimer=null;loadHistory();toast(data.failed?`Batch finished with ${data.failed} failed video${data.failed===1?'':'s'}.`:'Your video batch is ready!')}
+  const publishing=(data.videos||[]).some(video=>video.upload_status==='uploading');
+  if(terminal&&!publishing){clearInterval(pollTimer);pollTimer=null;loadHistory();if(lastTerminalToastBatch!==activeBatch){lastTerminalToastBatch=activeBatch;if(data.status==='cancelled')toast('Generation stopped. Completed videos remain available.');else if(data.status==='failed')toast(data.error||'The batch failed.');else toast(data.failed?`Batch finished with ${data.failed} failed video${data.failed===1?'':'s'}.`:'Your video batch is ready!')}}
  }catch(error){console.error(error)}
 }
 function stepsLabel(steps){if(!steps)return'Processing';const names={script:'Script',images:'Visuals',clips:'Motion clips',audio:'Narration',assembly:'Scene assembly',subtitles:'Captions and SRT',music:'Music',encoding:'MP4 encoding',seo:'YouTube metadata',thumbnail:'Thumbnail',upload:'Upload',finalize:'Finishing'};const done=Object.keys(steps).filter(k=>['done','fallback','skipped'].includes(steps[k])).map(k=>names[k]||k);return done.length?`Completed: ${done.slice(-2).join(', ')}`:'Processing'}
@@ -143,6 +167,6 @@ async function saveSettingsForm(){const button=$('#save-settings');button.disabl
 async function startOllamaFromSettings(){const label=$('#settings-ollama-status');label.textContent='Starting Ollama and loading the selected model…';try{const r=await fetch('/api/ollama/start',{method:'POST'});const d=await r.json();if(!r.ok)throw new Error(d.error||'Could not start Ollama');label.textContent=d.detail||'Startup requested.';setTimeout(loadOllamaStatus,1200)}catch(e){label.textContent=e.message;toast(e.message)}}
 async function pullOllamaFromSettings(){const model=$('#setting-ollama-model').value.trim()||'qwen2.5:7b';if(!window.confirm(`Download ${model}? This may use several gigabytes of disk space and internet data.`))return;const label=$('#settings-ollama-status');label.textContent=`Starting download of ${model}…`;try{const r=await fetch('/api/ollama/pull',{method:'POST'});const d=await r.json();if(!r.ok)throw new Error(d.error||'Could not start model download');label.textContent=d.detail||'Download started.';loadOllamaStatus()}catch(e){label.textContent=e.message;toast(e.message)}}
 async function uploadYoutubeCredentials(){const input=$('#youtube-credentials-file');const file=input.files&&input.files[0];if(!file)return;const label=$('#youtube-credential-label');label.textContent='Saving OAuth credentials…';try{const form=new FormData();form.append('file',file);const r=await fetch('/api/youtube/credentials',{method:'POST',body:form});const d=await r.json();if(!r.ok)throw new Error(d.error||'Could not save credentials');label.textContent='Google OAuth credentials are configured';await loadYoutubeStatus();toast('Google OAuth credentials saved locally.')}catch(e){label.textContent=e.message;toast(e.message)}finally{input.value=''}}
-async function loadHistory(){try{const r=await fetch('/api/batch/list');const d=await r.json();const list=d.batches||[];$('#queue-count').textContent=list.filter(x=>x.status==='running'||x.status==='queued').length;if(!list.length){$('#batch-history').innerHTML='<div class="empty-history"><span><i class="fa-regular fa-folder-open"></i></span><b>Your workspace is ready</b><small>Created batches will show up here.</small></div>';return}$('#batch-history').innerHTML=list.slice(0,5).map(b=>`<div class="history-card"><div><b>${b.total} video${b.total===1?'':'s'} · ${escapeHtml(b.batch_id)}</b><small>${new Date(b.created_at).toLocaleString()} · ${b.completed}/${b.total} processed</small></div><span class="history-state">${escapeHtml(b.status.toUpperCase())}</span></div>`).join('')}catch(e){}}
+async function loadHistory(){try{const r=await fetch('/api/batch/list');const d=await r.json();const list=d.batches||[];$('#queue-count').textContent=list.filter(x=>x.status==='running'||x.status==='queued'||x.status==='stopping').length;if(!list.length){$('#batch-history').innerHTML='<div class="empty-history"><span><i class="fa-regular fa-folder-open"></i></span><b>Your workspace is ready</b><small>Created batches will show up here.</small></div>';return}$('#batch-history').innerHTML=list.slice(0,5).map(b=>`<div class="history-card"><div><b>${b.total} video${b.total===1?'':'s'} · ${escapeHtml(b.batch_id)}</b><small>${new Date(b.created_at).toLocaleString()} · ${b.completed}/${b.total} processed</small></div><span class="history-state">${escapeHtml(b.status.toUpperCase())}</span></div>`).join('')}catch(e){}}
 async function loadSavedDefaults(){try{const r=await fetch('/api/settings');const s=await r.json();if(s.YOUTUBE_PRIVACY_STATUS)$('#privacy').value=s.YOUTUBE_PRIVACY_STATUS}catch(e){}}
 loadYoutubeStatus();loadOllamaStatus();loadHistory();loadSavedDefaults();setInterval(loadOllamaStatus,5000);
