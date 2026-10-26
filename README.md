@@ -38,7 +38,7 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-If PowerShell blocks activation, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, then activate again. For a CPU-only install, or for a CUDA PyTorch build, install PyTorch separately before the rest of the requirements. See **GPU generation** below; PyTorch wheels differ by OS and CUDA version.
+If PowerShell blocks activation, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, then activate again. The requirements install a default PyTorch wheel. If you plan to use NVIDIA acceleration, follow **GPU generation** below after installing the requirements to replace it with the CUDA-enabled wheel that matches your system.
 
 ### 3. Configure local services and environment
 
