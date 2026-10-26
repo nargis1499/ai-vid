@@ -100,6 +100,7 @@ def create_batch():
     if len(titles)>30:return jsonify({"error":"A batch can contain at most 30 titles."}),400
     custom_scripts=body.get("custom_scripts")
     if custom_scripts is not None:
+        if not env_bool("USE_OLLAMA",True):return jsonify({"error":"Custom-script review requires the local Ollama model. Enable Ollama in Settings first."}),400
         if not isinstance(custom_scripts,list) or len(custom_scripts)!=len(titles):return jsonify({"error":"Provide exactly one custom script for each video title."}),400
         custom_scripts=[str(script or "").strip() for script in custom_scripts]
         if any(not script for script in custom_scripts):return jsonify({"error":"Each custom script must contain narration text."}),400
