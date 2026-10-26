@@ -1,5 +1,5 @@
 """Background, sequential batch controller for the complete video pipeline."""
-import gc, threading, time, uuid, os, requests, copy
+import gc, threading, time, uuid, os, requests, copy, re, unicodedata
 from datetime import datetime
 from common import DIRS, env_bool
 from script_generator import ScriptGenerator
@@ -59,9 +59,24 @@ class BatchOrchestrator:
                 try:time.sleep(max(0,int(__import__('os').getenv("BATCH_DELAY_SECONDS","10"))))
                 except Exception:pass
         self._set(batch_id,status="completed",finished_at=datetime.utcnow().isoformat()+"Z")
+    @staticmethod
+    def _title_video_stem(title):
+        """Create a readable, filesystem-safe stem and avoid overwriting same-title videos."""
+        normalized=unicodedata.normalize("NFKC",str(title or "")).strip().lower()
+        stem=re.sub(r"[\s_]+","-",normalized)
+        stem=re.sub(r"[^\w-]","-",stem,flags=re.UNICODE)
+        stem=re.sub(r"-+","-",stem).strip("-._")[:100].rstrip("-._") or "video"
+        if stem.upper() in {"CON","PRN","AUX","NUL",*(f"COM{i}" for i in range(1,10)),*(f"LPT{i}" for i in range(1,10))}:
+            stem="video-"+stem
+        candidate=stem;counter=2
+        while any((DIRS["videos"]/f"{candidate}.{extension}").exists() for extension in ("mp4","srt")):
+            suffix=f"-{counter}"
+            candidate=stem[:100-len(suffix)].rstrip("-._")+suffix
+            counter+=1
+        return candidate
     def _process_single_video(self,title,index,duration,niche,batch_id,auto_upload,privacy,custom_script=None):
         steps={name:"pending" for name in ("script","images","clips","audio","assembly","subtitles","music","thumbnail","seo","upload")}
-        base=f"{batch_id}_{index+1}";self.sequence+=1;serial=self.sequence
+        base=self._title_video_stem(title);self.sequence+=1;serial=self.sequence
         result={"title":title,"success":False,"steps":steps,"video_path":None,"subtitle_path":None,"youtube_url":None,"seo":None,"error":None}
         report=lambda pct,stage,message:self._update_video_progress(batch_id,index,pct,stage,message)
         report(1,"script","Preparing your custom script and matching scenes…" if custom_script is not None else "Writing the script and scene plan…")
