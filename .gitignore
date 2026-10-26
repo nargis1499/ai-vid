@@ -1,0 +1,11 @@
+.env
+backend/.env
+backend/client_secret.json
+backend/token.json
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+output/**
+!output/.gitkeep
+.DS_Store
