@@ -1,5 +1,48 @@
 const $=s=>document.querySelector(s);const titlesEl=$('#titles');let activeBatch=null,pollTimer=null,toastTimer;
+const VIDEO_STEPS=[
+ {key:'script',label:'AI script & scene plan',hint:'Draft narration or analyze and revise your custom script.'},
+ {key:'images',label:'Create scene visuals',hint:'Generate visuals with local AI, stock search, or fallback artwork.'},
+ {key:'clips',label:'Find or generate motion clips',hint:'Animate scenes or find matching stock footage.'},
+ {key:'audio',label:'Generate voice narration',hint:'Create spoken audio for each scene.'},
+ {key:'assembly',label:'Assemble scenes & transitions',hint:'Arrange scene timing and apply transitions.'},
+ {key:'subtitles',label:'Create captions & SRT',hint:'Time English captions and save the subtitle file.'},
+ {key:'music',label:'Mix background music',hint:'Add a title-matched instrumental track.'},
+ {key:'encoding',label:'Encode final MP4',hint:'Render the selected resolution and frame rate.'},
+ {key:'seo',label:'Prepare YouTube metadata',hint:'Generate title, description, tags, and publishing details.'},
+ {key:'thumbnail',label:'Create thumbnail',hint:'Design the cover image for the video.'},
+ {key:'upload',label:'Upload to YouTube',hint:'Runs only when automatic publishing is enabled.'},
+ {key:'finalize',label:'Finish & prepare downloads',hint:'Make completed video and subtitle files available.'}
+];
 function toast(message){const el=$('#toast');el.textContent=message;el.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),3500)}
+function stepDetailsMarkup(){return `<details class="step-details"><summary><span><i class="fa-solid fa-list-check"></i> Step-by-step progress</span><span class="step-count">0/${VIDEO_STEPS.length}</span></summary><ol class="step-list">${VIDEO_STEPS.map((step,index)=>`<li class="step-item" data-step="${step.key}"><span class="step-marker">${String(index+1).padStart(2,'0')}</span><div class="step-copy"><b>${step.label}</b><small class="step-message">Waiting to start</small><span class="step-mini-track"><i></i></span></div><span class="step-status">WAITING</span></li>`).join('')}</ol></details>`}
+function makeVideoRow(title,index){return `<div class="video-row" data-index="${index}"><span class="video-number">${String(index+1).padStart(2,'0')}</span><div class="video-row-main"><b>${escapeHtml(title)}</b><small class="video-progress-message">Queued</small><div class="video-progress-track"><div class="video-progress-fill"></div></div>${stepDetailsMarkup()}</div><span class="row-state">WAITING</span></div>`}
+function updateStepDetails(row,video){
+ const details=row.querySelector('.step-details');
+ if(!details)return;
+ const steps=video.steps||{};
+ const messages=video.step_messages||{};
+ const completeStates=new Set(['done','fallback','skipped']);
+ let complete=0;
+ for(const definition of VIDEO_STEPS){
+  const item=details.querySelector(`[data-step="${definition.key}"]`);
+  if(!item)continue;
+  const state=steps[definition.key]||'pending';
+  if(completeStates.has(state))complete++;
+  const message=messages[definition.key]||(state==='running'&&video.current_stage===definition.key?video.progress_message:null)||(completeStates.has(state)?({done:'Completed',fallback:'Completed with fallback',skipped:'Skipped'}[state]):state==='failed'?'This step failed.':definition.hint);
+  const text=String(message||'');
+  const percentMatch=text.match(/(\d{1,3})%/);
+  const itemMatch=text.match(/\b(\d+)\s+of\s+(\d+)\b/i);
+  const measured=state==='running'&&Boolean(percentMatch||itemMatch);
+  item.className=`step-item state-${state}${video.current_stage===definition.key&&state==='running'?' is-current':''}${measured?' has-measured-progress':''}`;
+  item.querySelector('.step-message').textContent=message;
+  item.querySelector('.step-status').textContent=({pending:'WAITING',running:'IN PROGRESS',done:'DONE',fallback:'FALLBACK',skipped:'SKIPPED',failed:'FAILED'})[state]||String(state).toUpperCase();
+  let amount=completeStates.has(state)||state==='failed'?100:0;
+  if(state==='running')amount=percentMatch?Math.max(0,Math.min(100,Number(percentMatch[1]))):itemMatch?Math.round(100*Number(itemMatch[1])/Math.max(1,Number(itemMatch[2]))):28;
+  item.querySelector('.step-mini-track i').style.width=`${amount}%`;
+ }
+ details.querySelector('.step-count').textContent=`${complete}/${VIDEO_STEPS.length} complete`;
+ if(video.status==='processing'&&!row.dataset.stepDetailsAutoOpened){details.open=true;row.dataset.stepDetailsAutoOpened='true'}
+}
 function renderCustomScriptEditors(){const wrap=$('#custom-script-editors');const titles=titlesEl.value.split('\n').map(x=>x.trim()).filter(Boolean);const previous=[...wrap.querySelectorAll('.custom-script-input')].map(input=>input.value);if(!titles.length){wrap.innerHTML='<small class="script-empty-hint">Add video titles above to create a script field for each one.</small>';return}wrap.innerHTML=titles.map((title,i)=>`<label class="custom-script-editor"><span>VIDEO ${String(i+1).padStart(2,'0')} · ${escapeHtml(title)}</span><textarea class="custom-script-input" maxlength="40000" placeholder="Paste the exact narration for this video…">${escapeHtml(previous[i]||'')}</textarea></label>`).join('')}
 titlesEl.addEventListener('input',()=>{const n=titlesEl.value.split('\n').map(x=>x.trim()).filter(Boolean).length;$('#title-count').textContent=`${n} title${n===1?'':'s'}`;if($('#use-custom-script').checked)renderCustomScriptEditors()});
 $('#use-custom-script').addEventListener('change',event=>{const panel=$('#custom-scripts-panel');panel.classList.toggle('hidden',!event.target.checked);if(event.target.checked)renderCustomScriptEditors()});
@@ -32,12 +75,60 @@ async function startBatch(){
   const response=await fetch('/api/batch/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   const data=await response.json();if(!response.ok)throw new Error(data.error||'Unable to start batch');
   activeBatch=data.batch_id;$('#progress-section').classList.remove('hidden');$('#total-count').textContent=titles.length;$('#done-count').textContent='0';$('#failed-count').textContent='0 failed';$('#progress-title').textContent='Preparing your videos';$('#progress-message').textContent=useCustom?'Preparing your scripts and scenes…':'Starting the creative pipeline…';
-  $('#video-list').innerHTML=titles.map((title,i)=>`<div class="video-row" data-index="${i}"><span class="video-number">${String(i+1).padStart(2,'0')}</span><div class="video-row-main"><b>${escapeHtml(title)}</b><small class="video-progress-message">Queued</small><div class="video-progress-track"><div class="video-progress-fill"></div></div></div><span class="row-state">WAITING</span></div>`).join('');
+  $('#video-list').innerHTML=titles.map(makeVideoRow).join('');
   $('#progress-section').scrollIntoView({behavior:'smooth',block:'nearest'});await pollBatch();pollTimer=setInterval(pollBatch,3000)
  }catch(e){toast(e.message)}finally{button.disabled=false;button.querySelector('span:nth-child(2)').textContent='Generate video batch'}
 }
-async function pollBatch(){if(!activeBatch)return;try{const r=await fetch(`/api/batch/status/${encodeURIComponent(activeBatch)}`);const d=await r.json();if(!r.ok)throw new Error(d.error);$('#progress-bar').style.width=`${d.progress||0}%`;$('#done-count').textContent=d.completed||0;$('#failed-count').textContent=`${d.failed||0} failed`;updateGpuStatus(d.gpu_status||{});$('#progress-title').textContent=d.status==='completed'?'Batch complete':'Creating your videos';$('#progress-message').textContent=d.status==='completed'?'All titles have finished processing.':`Working through ${d.total} video${d.total===1?'':'s'} in sequence…`;$('#batch-status').innerHTML=`<span class="status-dot ${d.status==='completed'?'green':''}"></span> ${escapeHtml(String(d.status).toUpperCase())}`;d.videos.forEach((video,i)=>{const row=$(`.video-row[data-index="${i}"]`);if(!row)return;const state=video.status||'waiting';const pct=state==='done'?100:Number(video.progress||0);const message=state==='processing'?(video.progress_message||stepsLabel(video.steps)):state==='done'?(video.video_encoder?`Finished · ${video.video_encoder}${video.music_warning?' · music unavailable':''}`:(video.music_warning?'Video ready · background music unavailable':'Finished processing')):state==='failed'?(video.error||video.upload_error||'Something went wrong'):'Waiting to start';row.querySelector('.video-progress-message').textContent=state==='processing'?`${message} · ${pct}%`:message;row.querySelector('.video-progress-fill').style.width=`${pct}%`;const badge=row.querySelector('.row-state');badge.className=`row-state ${state}`;badge.textContent=state.toUpperCase();if(video.script&&Array.isArray(video.script.scenes)&&!row.querySelector('.script-preview')){const details=document.createElement('details');details.className='script-preview';const summary=document.createElement('summary');summary.textContent=video.script.custom_script_reviewed?'View AI-reviewed narration':'View generated narration';const preview=document.createElement('div');preview.className='script-preview-content';if(video.script.review_summary){const note=document.createElement('small');note.textContent=video.script.review_summary;preview.append(note)}const narration=document.createElement('pre');narration.textContent=video.script.scenes.map(scene=>scene.narration||'').filter(Boolean).join(String.fromCharCode(10,10));preview.append(narration);details.append(summary,preview);row.querySelector('.video-row-main').append(details)}if(video.video_path&&!row.querySelector('.video-download')){const link=document.createElement('a');link.href=`/api/video/${encodeURIComponent(activeBatch)}/${i}`;link.textContent='Download video';link.className='video-download';link.setAttribute('download','');row.querySelector('b').append(' ',link)}if(video.subtitle_path&&!row.querySelector('.subtitle-download')){const link=document.createElement('a');link.href=`/api/subtitles/${encodeURIComponent(activeBatch)}/${i}`;link.textContent='Subtitles (.srt)';link.className='subtitle-download';link.setAttribute('download','');row.querySelector('b').append(' ',link)}if(video.youtube_url&&!row.querySelector('.youtube-link')){const link=document.createElement('a');link.href=video.youtube_url;link.target='_blank';link.rel='noopener';link.className='youtube-link';link.innerHTML='<i class="fa-brands fa-youtube"></i> View';badge.append(link)}});if(d.status==='completed'){clearInterval(pollTimer);pollTimer=null;loadHistory();toast(d.failed?`Batch finished with ${d.failed} failed video${d.failed===1?'':'s'}.`:'Your video batch is ready!')}}catch(e){console.error(e)}}
-function stepsLabel(steps){if(!steps)return'Processing';const names={script:'Script',images:'Visuals',clips:'Motion',audio:'Voice',assembly:'Edit',subtitles:'Subtitles',music:'Music',thumbnail:'Thumbnail',seo:'SEO',upload:'Upload'};const done=Object.keys(steps).filter(k=>['done','fallback','skipped'].includes(steps[k])).map(k=>names[k]||k);return done.length?`Completed: ${done.slice(-2).join(', ')}`:'Processing'}
+async function pollBatch(){
+ if(!activeBatch)return;
+ try{
+  const response=await fetch(`/api/batch/status/${encodeURIComponent(activeBatch)}`);
+  const data=await response.json();
+  if(!response.ok)throw new Error(data.error);
+  $('#progress-bar').style.width=`${data.progress||0}%`;
+  $('#done-count').textContent=data.completed||0;
+  $('#failed-count').textContent=`${data.failed||0} failed`;
+  updateGpuStatus(data.gpu_status||{});
+  $('#progress-title').textContent=data.status==='completed'?'Batch complete':'Creating your videos';
+  const activeVideo=(data.videos||[]).find(video=>video.status==='processing');
+  if(data.status==='completed')$('#progress-message').textContent='All generation steps have finished.';
+  else if(activeVideo)$('#progress-message').textContent=`${activeVideo.title}: ${activeVideo.progress_message||activeVideo.current_stage} · ${activeVideo.progress||0}%`;
+  else $('#progress-message').textContent=`Waiting to process ${data.total} video${data.total===1?'':'s'}…`;
+  $('#batch-status').innerHTML=`<span class="status-dot ${data.status==='completed'?'green':''}"></span> ${escapeHtml(String(data.status).toUpperCase())}`;
+  data.videos.forEach((video,index)=>{
+   const row=$(`.video-row[data-index="${index}"]`);
+   if(!row)return;
+   const state=video.status||'waiting';
+   const pct=state==='done'?100:Number(video.progress||0);
+   const message=state==='processing'?(video.progress_message||stepsLabel(video.steps)):state==='done'?(video.video_encoder?`Finished · ${video.video_encoder}${video.music_warning?' · music unavailable':''}`:(video.music_warning?'Video ready · background music unavailable':'Finished processing')):state==='failed'?(video.error||video.upload_error||'Something went wrong'):'Waiting to start';
+   row.querySelector('.video-progress-message').textContent=state==='processing'?`${message} · video ${pct}%`:message;
+   const progressFill=row.querySelector('.video-progress-fill');
+   progressFill.style.width=`${pct}%`;
+   progressFill.setAttribute('aria-valuenow',String(pct));
+   const badge=row.querySelector('.row-state');
+   badge.className=`row-state ${state}`;
+   badge.textContent=state.toUpperCase();
+   updateStepDetails(row,video);
+   if(video.script&&Array.isArray(video.script.scenes)&&!row.querySelector('.script-preview')){
+    const details=document.createElement('details');
+    details.className='script-preview';
+    const summary=document.createElement('summary');
+    summary.textContent=video.script.custom_script_reviewed?'View AI-reviewed narration':'View generated narration';
+    const preview=document.createElement('div');
+    preview.className='script-preview-content';
+    if(video.script.review_summary){const note=document.createElement('small');note.textContent=video.script.review_summary;preview.append(note)}
+    const narration=document.createElement('pre');
+    narration.textContent=video.script.scenes.map(scene=>scene.narration||'').filter(Boolean).join(String.fromCharCode(10,10));
+    preview.append(narration);details.append(summary,preview);row.querySelector('.video-row-main').append(details)
+   }
+   if(video.video_path&&!row.querySelector('.video-download')){const link=document.createElement('a');link.href=`/api/video/${encodeURIComponent(activeBatch)}/${index}`;link.textContent='Download video';link.className='video-download';link.setAttribute('download','');row.querySelector('b').append(' ',link)}
+   if(video.subtitle_path&&!row.querySelector('.subtitle-download')){const link=document.createElement('a');link.href=`/api/subtitles/${encodeURIComponent(activeBatch)}/${index}`;link.textContent='Subtitles (.srt)';link.className='subtitle-download';link.setAttribute('download','');row.querySelector('b').append(' ',link)}
+   if(video.youtube_url&&!row.querySelector('.youtube-link')){const link=document.createElement('a');link.href=video.youtube_url;link.target='_blank';link.rel='noopener';link.className='youtube-link';link.innerHTML='<i class="fa-brands fa-youtube"></i> View';badge.append(link)}
+  });
+  if(data.status==='completed'){clearInterval(pollTimer);pollTimer=null;loadHistory();toast(data.failed?`Batch finished with ${data.failed} failed video${data.failed===1?'':'s'}.`:'Your video batch is ready!')}
+ }catch(error){console.error(error)}
+}
+function stepsLabel(steps){if(!steps)return'Processing';const names={script:'AI script',images:'Visuals',clips:'Motion clips',audio:'Narration',assembly:'Scene assembly',subtitles:'Captions and SRT',music:'Music',encoding:'MP4 encoding',seo:'YouTube metadata',thumbnail:'Thumbnail',upload:'Upload',finalize:'Finishing'};const done=Object.keys(steps).filter(k=>['done','fallback','skipped'].includes(steps[k])).map(k=>names[k]||k);return done.length?`Completed: ${done.slice(-2).join(', ')}`:'Processing'}
 function escapeHtml(value){return String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function updateGpuStatus(gpu){const pill=$('#gpu-status');const label=pill.querySelector('.gpu-status-label');const state=gpu.state||'unavailable';pill.className=`gpu-status state-${state}`;pill.title=gpu.message||'GPU status unavailable';let text;if(state==='active')text=`${gpu.device||'GPU'} IN USE · ${gpu.operation||'accelerated processing'}${gpu.vram_used_gb!=null?` · ${gpu.vram_used_gb} GB VRAM`:''}`;else if(state==='loaded')text=`${gpu.device||'GPU'} idle · Ollama model loaded${gpu.vram_used_gb!=null?` · ${gpu.vram_used_gb} GB VRAM`:''}`;else if(state==='ready')text=`${gpu.device||'NVIDIA GPU'} detected · GPU idle (ready)`;else if(state==='disabled')text=`${gpu.device||'NVIDIA GPU'} detected · not in use (local AI is off)`;else text=gpu.message||'NVIDIA GPU not detected by PyTorch';label.textContent=text}
 async function loadYoutubeStatus(){try{const r=await fetch('/api/youtube/status');const d=await r.json();$('#youtube-state').textContent=d.connected?'Connected':'Not connected';$('#youtube-dot').classList.toggle('green',d.connected);$('#youtube-detail').textContent=d.connected?`${d.uploads_today} of ${d.max_uploads_per_day} daily uploads used.`:(d.error||'Connect your channel to enable publishing.');$('#connect-youtube').innerHTML=d.connected?'<i class="fa-solid fa-check"></i> Channel connected':'<i class="fa-brands fa-youtube"></i> Connect channel'}catch(e){$('#youtube-state').textContent='Offline'}}
