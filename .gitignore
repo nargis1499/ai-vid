@@ -6,6 +6,9 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+backend/dist/
+backend/build/
+backend/*.spec
 output/**
 !output/.gitkeep
 .DS_Store

@@ -2,11 +2,15 @@
 import json,os,time
 from pathlib import Path
 from common import BASE_DIR
+from settings_store import APP_DATA_DIR
 class YouTubeUploader:
     SCOPES=["https://www.googleapis.com/auth/youtube.upload","https://www.googleapis.com/auth/youtube"]
     def __init__(self):
-        self.client_file=BASE_DIR/"client_secret.json";self.token_file=BASE_DIR/"token.json";self.service=None;self.last_error=None
-        self.counter_file=BASE_DIR/"upload_counter.json";self.max_uploads=int(os.getenv("MAX_UPLOADS_PER_DAY","5"))
+        self.client_file=APP_DATA_DIR/"client_secret.json"
+        legacy_client=BASE_DIR/"client_secret.json"
+        if not self.client_file.exists() and legacy_client.exists(): self.client_file=legacy_client
+        self.token_file=APP_DATA_DIR/"token.json";self.service=None;self.last_error=None
+        self.counter_file=APP_DATA_DIR/"upload_counter.json";self.max_uploads=int(os.getenv("MAX_UPLOADS_PER_DAY","5"))
     def authenticate(self,interactive=False):
         if not self.client_file.exists():self.last_error="Add backend/client_secret.json from Google Cloud to enable YouTube.";return False
         try:

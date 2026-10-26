@@ -1,7 +1,7 @@
 """Background, sequential batch controller for the complete video pipeline."""
-import gc, threading, time, uuid
+import gc, threading, time, uuid, os, requests
 from datetime import datetime
-from common import DIRS
+from common import DIRS, env_bool
 from script_generator import ScriptGenerator
 from audio_generator import AudioGenerator
 from image_generator import ImageGenerator
@@ -57,6 +57,8 @@ class BatchOrchestrator:
         try:
             script=self.scripts.generate_script(title,duration);result["script"]=script;steps["script"]="done"
         except Exception as exc:steps["script"]="failed";result["error"]=f"Script generation failed: {exc}";return result
+        if env_bool("USE_LOCAL_IMAGES",False) or env_bool("USE_LOCAL_VIDEO",False):
+            self._release_ollama_for_gpu()
         media=[];scene_images=[]
         for i,scene in enumerate(script.get("scenes",[])):
             path=self.local.generate_image(scene.get("visual_description",title),serial*100+i)
@@ -88,6 +90,17 @@ class BatchOrchestrator:
             else:steps["upload"]="failed";result["upload_error"]=upload.get("error");result["success"]=False
         else:steps["upload"]="skipped"
         return result
+    @staticmethod
+    def _release_ollama_for_gpu():
+        """Unload the selected LLM before loading diffusion models onto the same GPU."""
+        if not env_bool("USE_OLLAMA",True):return
+        model=os.getenv("OLLAMA_MODEL","qwen2.5:7b")
+        url=os.getenv("OLLAMA_URL","http://localhost:11434").rstrip("/")
+        try:
+            requests.post(url+"/api/generate",json={"model":model,"prompt":"","stream":False,"keep_alive":0,"options":{"num_predict":0}},timeout=8)
+        except requests.RequestException as exc:
+            print(f"[gpu] Could not request Ollama model unload before diffusion step: {exc}")
+
     @staticmethod
     def _clear_gpu():
         try:

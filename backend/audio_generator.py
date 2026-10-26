@@ -1,10 +1,11 @@
 """Narration via Edge TTS with a silent-audio fallback."""
 import asyncio
+import os
 from pathlib import Path
 from common import DIRS
 
 class AudioGenerator:
-    def __init__(self): self.voice = "en-US-AriaNeural"
+    def __init__(self): self.voice = os.getenv("EDGE_TTS_VOICE", "en-US-AriaNeural")
     def generate(self, text: str, index: int) -> str:
         path = DIRS["audio"] / f"narration_{index}.mp3"
         try:

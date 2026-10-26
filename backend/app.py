@@ -4,14 +4,51 @@ import requests
 from pathlib import Path
 from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
+import common
 from common import DIRS, ROOT_DIR, env_bool
+from settings_store import APP_DATA_DIR, apply_environment, load_settings, public_settings, save_settings
+from ollama_runtime import OllamaRuntime
+
+_boot_settings = load_settings()
+apply_environment(_boot_settings)
+common.OUTPUT_DIR = Path(_boot_settings["OUTPUT_DIR"]).expanduser().resolve()
+common.DIRS.clear()
+common.DIRS.update({name: common.OUTPUT_DIR / name for name in ("images", "audio", "videos", "clips", "thumbnails", "local_ai", "uploads", "batch")})
+for _directory in common.DIRS.values():
+    _directory.mkdir(parents=True, exist_ok=True)
 from batch_orchestrator import BatchOrchestrator
 
 app=Flask(__name__,static_folder=None)
 CORS(app)
 app.config["MAX_CONTENT_LENGTH"]=100*1024*1024
 orchestrator=BatchOrchestrator()
+app.config["OLLAMA_RUNTIME"]=OllamaRuntime(load_settings)
 FRONTEND=ROOT_DIR/"frontend"
+
+def _apply_runtime_settings(settings):
+    apply_environment(settings)
+    output_dir=Path(settings["OUTPUT_DIR"]).expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    common.OUTPUT_DIR=output_dir
+    common.DIRS.clear()
+    common.DIRS.update({name: output_dir/name for name in ("images", "audio", "videos", "clips", "thumbnails", "local_ai", "uploads", "batch")})
+    for directory in common.DIRS.values(): directory.mkdir(parents=True, exist_ok=True)
+    orchestrator.scripts.enabled=env_bool("USE_OLLAMA", True)
+    orchestrator.scripts.url=os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+    orchestrator.scripts.model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+    orchestrator.seo.enabled=orchestrator.scripts.enabled
+    orchestrator.seo.url=orchestrator.scripts.url
+    orchestrator.seo.model=orchestrator.scripts.model
+    orchestrator.images.api_key=os.getenv("PEXELS_API_KEY", "").strip()
+    orchestrator.fetcher.api_key=orchestrator.images.api_key
+    orchestrator.youtube.max_uploads=int(os.getenv("MAX_UPLOADS_PER_DAY", "5"))
+    orchestrator.audio.voice=os.getenv("EDGE_TTS_VOICE", "en-US-AriaNeural")
+    runtime=app.config.get("OLLAMA_RUNTIME")
+    if runtime:
+        if settings.get("USE_OLLAMA", True) and settings.get("OLLAMA_AUTO_START", True):
+            runtime.start()
+        else:
+            runtime.deactivate()
 
 @app.get("/")
 def index():return send_from_directory(FRONTEND,"index.html")
@@ -29,7 +66,7 @@ def create_batch():
     if len(titles)>30:return jsonify({"error":"A batch can contain at most 30 titles."}),400
     try:duration=max(30,min(1800,int(body.get("duration",120))))
     except (TypeError,ValueError):return jsonify({"error":"duration must be a number of seconds"}),400
-    niche=str(body.get("niche","General"))[:80];privacy=body.get("privacy","private")
+    niche=str(body.get("niche","General"))[:80];privacy=body.get("privacy",os.getenv("YOUTUBE_PRIVACY_STATUS","private"))
     if privacy not in {"private","unlisted","public"}:return jsonify({"error":"privacy must be private, unlisted, or public"}),400
     batch_id=orchestrator.start_batch(titles,duration,niche,bool(body.get("auto_upload",False)),privacy)
     return jsonify({"batch_id":batch_id,"status":"queued"}),202
@@ -50,8 +87,10 @@ def youtube_status():return jsonify(orchestrator.youtube.status())
 def ollama_status():
     """Report service reachability, model installation, and actual model load state."""
     model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b").strip()
+    runtime=app.config.get("OLLAMA_RUNTIME")
+    runtime_status=runtime.status() if runtime else None
     if not env_bool("USE_OLLAMA", True):
-        return jsonify({"state":"disabled","model":model,"installed":False,"loaded":False,"detail":"Ollama use is disabled in backend/.env."})
+        return jsonify({"state":"disabled","model":model,"installed":False,"loaded":False,"detail":"Ollama use is disabled in Settings.","runtime":runtime_status})
     base_url=os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
     try:
         tags_response=requests.get(f"{base_url}/api/tags", timeout=2.5)
@@ -76,11 +115,33 @@ def ollama_status():
             state,detail="ready",f"{model} is installed; Ollama loads it when a generation request arrives."
         else:
             state,detail="missing",f"Ollama is reachable, but {model} is not installed. Run: ollama pull {model}"
-        return jsonify({"state":state,"model":model,"installed":installed,"loaded":loaded,"detail":detail})
+        if runtime_status and runtime_status.get("state") in {"starting", "warming", "pulling"}:
+            state=runtime_status["state"]
+            detail=runtime_status.get("detail", detail)
+        return jsonify({"state":state,"model":model,"installed":installed,"loaded":loaded,"detail":detail,"runtime":runtime_status})
     except requests.RequestException:
-        return jsonify({"state":"offline","model":model,"installed":False,"loaded":False,"detail":f"Cannot reach Ollama at {base_url}. Start the Ollama app/service."})
+        runtime_state=runtime_status.get("state") if runtime_status else None
+        pending=runtime_state in {"checking", "starting", "warming", "pulling", "not-installed", "error"}
+        state=runtime_state if pending else "offline"
+        detail=runtime_status.get("detail") if pending else f"Cannot reach Ollama at {base_url}. Start the Ollama app/service."
+        return jsonify({"state":state,"model":model,"installed":False,"loaded":False,"detail":detail,"runtime":runtime_status})
     except (ValueError, TypeError) as exc:
-        return jsonify({"state":"error","model":model,"installed":False,"loaded":False,"detail":f"Could not read Ollama status: {exc}"})
+        return jsonify({"state":"error","model":model,"installed":False,"loaded":False,"detail":f"Could not read Ollama status: {exc}","runtime":runtime_status})
+
+@app.post("/api/ollama/start")
+def start_ollama():
+    runtime=app.config.get("OLLAMA_RUNTIME")
+    if not runtime:
+        return jsonify({"error":"Ollama desktop runtime is unavailable."}),503
+    return jsonify(runtime.activate()),202
+
+@app.post("/api/ollama/pull")
+def pull_ollama_model():
+    runtime=app.config.get("OLLAMA_RUNTIME")
+    if not runtime:
+        return jsonify({"error":"Ollama desktop runtime is unavailable."}),503
+    result=runtime.pull_model()
+    return (jsonify(result),202) if result.get("started") else (jsonify(result),409)
 
 @app.get("/api/video/<batch_id>/<int:index>")
 def get_video(batch_id,index):
@@ -89,11 +150,52 @@ def get_video(batch_id,index):
     path=batch["videos"][index].get("video_path")
     if not path or not Path(path).is_file():return jsonify({"error":"Video is not ready"}),404
     return send_file(path,as_attachment=True,download_name=Path(path).name)
+@app.get("/api/settings")
+def get_settings():
+    return jsonify(public_settings())
+
+@app.post("/api/settings")
+def update_settings():
+    body=request.get_json(silent=True) or {}
+    allowed=set(public_settings())-{"PEXELS_API_KEY_CONFIGURED", "YOUTUBE_CREDENTIALS_CONFIGURED"}
+    updates={key:value for key,value in body.items() if key in allowed}
+    if body.get("PEXELS_API_KEY"):
+        updates["PEXELS_API_KEY"]=str(body["PEXELS_API_KEY"]).strip()
+    elif body.get("CLEAR_PEXELS_API_KEY"):
+        updates["PEXELS_API_KEY"]=""
+    try:
+        settings=save_settings(updates)
+        _apply_runtime_settings(settings)
+        return jsonify(public_settings(settings))
+    except (ValueError, TypeError, OSError) as exc:
+        return jsonify({"error":str(exc)}),400
+
+@app.post("/api/youtube/credentials")
+def save_youtube_credentials():
+    upload=request.files.get("file")
+    if not upload or not str(upload.filename or "").lower().endswith(".json"):
+        return jsonify({"error":"Choose the OAuth client JSON file downloaded from Google Cloud."}),400
+    try:
+        import json
+        credentials=json.loads(upload.read().decode("utf-8"))
+        if not isinstance(credentials,dict) or not ("installed" in credentials or "web" in credentials):
+            return jsonify({"error":"This does not look like a Google OAuth client credentials JSON file."}),400
+        credential_path=APP_DATA_DIR/"client_secret.json"
+        credential_path.write_text(json.dumps(credentials,indent=2),encoding="utf-8")
+        if os.name!="nt": credential_path.chmod(0o600)
+        orchestrator.youtube.client_file=credential_path
+        orchestrator.youtube.token_file=APP_DATA_DIR/"token.json"
+        orchestrator.youtube.service=None
+        return jsonify({"success":True,"configured":True})
+    except (UnicodeDecodeError, ValueError, OSError) as exc:
+        return jsonify({"error":f"Could not save credentials: {exc}"}),400
+
 @app.get("/api/health")
-def health():return jsonify({"ok":True,"service":"YouTube Auto Creator"})
+def health():return jsonify({"ok":True,"service":"CreatorFlow Desktop"})
 
 if __name__=="__main__":
     print("YouTube Auto Creator starting on http://localhost:5000")
     print("GPU generation enabled:",orchestrator.local.available)
     print("YouTube:","connected" if orchestrator.youtube.status()["connected"] else "not configured")
+    app.config["OLLAMA_RUNTIME"].start()
     app.run(host="0.0.0.0",port=int(os.getenv("PORT","5000")),debug=False,threaded=True)
