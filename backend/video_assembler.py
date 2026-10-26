@@ -5,8 +5,11 @@ from common import DIRS
 class VideoAssembler:
     def create(self,script:dict,media_items:list,audio_paths:list,video_id:str)->str:
         try:
-            from moviepy.editor import (AudioFileClip, ImageClip, VideoFileClip, concatenate_videoclips)
             from PIL import Image
+            # MoviePy 1.x still references Image.ANTIALIAS, removed in Pillow 10.
+            if not hasattr(Image, "ANTIALIAS"):
+                Image.ANTIALIAS = Image.Resampling.LANCZOS
+            from moviepy.editor import (AudioFileClip, ImageClip, VideoFileClip, concatenate_videoclips)
         except Exception as exc:raise RuntimeError("MoviePy/FFmpeg is required to assemble videos") from exc
         clips=[];audios=[]
         try:

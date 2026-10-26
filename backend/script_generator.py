@@ -1,5 +1,5 @@
 """Ollama-backed scene script generation with a reliable offline fallback."""
-import json, re
+import json, re, os
 import requests
 from common import env_bool
 

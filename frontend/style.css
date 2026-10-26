@@ -2,3 +2,51 @@
 @media(max-width:1100px){.main-content{padding:0 28px}.hero-art{right:1%;opacity:.55}.workspace-grid{grid-template-columns:minmax(0,1.2fr) minmax(290px,.8fr)}.create-panel,.pipeline-panel{padding:20px 18px}.select-wrap{padding:0 7px;gap:5px}.select-wrap select{font-size:9px}}
 @media(max-width:850px){.sidebar{width:67px;padding:20px 10px}.brand{padding:0 5px;margin-bottom:45px}.brand>span:last-child,.nav-label,.nav-item span,.connection-card,.sidebar-footer>span:not(.avatar),.sidebar-footer>i{display:none}.nav-item{justify-content:center;padding:0}.nav-item i{font-size:16px}.sidebar-footer{justify-content:center;padding-top:13px}.main-content{margin-left:67px}.workspace-grid{grid-template-columns:1fr}.pipeline-panel{min-height:unset}.hero-art{right:0;opacity:.35}.hero{min-height:225px}}
 @media(max-width:580px){.main-content{padding:0 15px}.topbar{height:56px}.hero{padding:32px 0 24px;min-height:unset}.hero h1{font-size:32px}.hero p{max-width:85%;font-size:11px}.hero-art{right:-92px;top:15px;transform:scale(.7);opacity:.24}.workspace-grid{gap:12px}.create-panel,.pipeline-panel{padding:18px 15px}.form-grid{grid-template-columns:1fr}.form-field .field-label{margin-top:13px}.select-wrap{height:39px}.generate-button>i{position:static;margin-left:0}.pipeline-foot{font-size:8px}.footer{font-size:7px}.footer span:last-child{display:none}.progress-panel{padding:18px 14px}.progress-meta{font-size:9px;gap:12px}.progress-meta span:first-child{max-width:45%}.breadcrumbs{font-size:10px}.top-actions{gap:9px}}
+
+/* Readability pass: lift the original compact dashboard typography. */
+body{font-size:15px}
+.nav-label,.step-kicker{font-size:11px}
+.nav-item{font-size:14px}
+.connection-top{font-size:13px}
+.connection-state{font-size:10px}
+.connection-card p{font-size:12px}
+.connect-btn{font-size:12px}
+.sidebar-footer b{font-size:12px}
+.sidebar-footer small{font-size:11px}
+.breadcrumbs,.local-pill{font-size:12px}
+.eyebrow{font-size:11px}
+.hero p{font-size:14px}
+.panel-heading h2,.section-title h2,.progress-heading h2{font-size:22px}
+.field-label{font-size:11px}
+.field-label span{font-size:12px}
+.textarea-wrap textarea{font-size:14px;line-height:1.65}
+.textarea-footer{font-size:11px}
+.select-wrap select{font-size:12px!important}
+.upload-copy b{font-size:13px}
+.upload-copy small{font-size:11px}
+.generate-button{font-size:14px}
+.privacy-note{font-size:11px}
+.panel-subtitle{font-size:12px}
+.pipeline-step b{font-size:13px}
+.pipeline-step small{font-size:11px}
+.pipeline-foot{font-size:11px}
+.empty-history b,.history-card b{font-size:12px}
+.empty-history small,.history-card small{font-size:11px}
+.history-state,.text-button{font-size:11px}
+.progress-meta{font-size:12px}
+.video-row b{font-size:12px}
+.video-row small,.row-state{font-size:11px}
+.toast{font-size:13px}
+.ollama-pill{display:flex;align-items:center;gap:7px;padding:7px 10px;border:1px solid #2b303d;border-radius:8px;background:#11141c;color:#cbd0da;font-size:12px;white-space:nowrap}
+.ollama-pill b{font-size:11px;font-weight:700;color:#aeb5c3}
+.ollama-pill .status-dot{width:8px;height:8px}
+.ollama-pill .status-dot.amber{background:#dfb55f;box-shadow:0 0 9px #dfb55f40}
+.ollama-pill.state-running{border-color:#2d5747;background:#111c19}
+.ollama-pill.state-running b{color:#6cdbab}
+.ollama-pill.state-ready{border-color:#5b4c2b;background:#1c1912}
+.ollama-pill.state-ready b{color:#e5c06e}
+.ollama-pill.state-missing,.ollama-pill.state-offline,.ollama-pill.state-error{border-color:#59333a;background:#201519}
+.ollama-pill.state-missing b,.ollama-pill.state-offline b,.ollama-pill.state-error b{color:#f18b92}
+.top-actions{gap:12px}
+@media(max-width:850px){.ollama-pill{padding:6px 8px;font-size:11px}.ollama-pill b{font-size:10px}.top-actions{gap:8px}}
+@media(max-width:580px){body{font-size:14px}.top-actions{gap:6px}.local-pill{display:none}.ollama-pill{gap:5px;padding:5px 6px;font-size:10px}.ollama-pill b{font-size:9px}.local-pill{font-size:10px}.hero p{font-size:12px}.textarea-wrap textarea{font-size:13px}.pipeline-foot{font-size:10px}.progress-meta{font-size:10px}.connection-card p{font-size:11px}}
