@@ -289,7 +289,7 @@ class VideoAssembler:
         from moviepy.editor import VideoClip
 
         frame_w, frame_h = int(frame_size[0]), int(frame_size[1])
-        font = cls._subtitle_font(ImageFont, max(32, int(frame_h * 0.058)))
+        font = cls._subtitle_font(ImageFont, max(28, int(frame_h * 0.048)))
         entries = []
         chunks_by_key = {}
         word_states = []
@@ -458,7 +458,7 @@ class VideoAssembler:
 
     @staticmethod
     def _caption_image(text, Image, ImageDraw, ImageFont, font, frame_w, highlight_index=None):
-        """Render clean word-highlight captions with text shadow and no backing box."""
+        """Render smaller, word-highlight captions with lighter shadow and no backing box."""
         max_line_width = int(frame_w * 0.90)
         helper = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
         measure = ImageDraw.Draw(helper)
@@ -466,7 +466,7 @@ class VideoAssembler:
         line_words = []
         for word in str(text).split():
             candidate = " ".join(line_words + [word])
-            if line_words and measure.textbbox((0, 0), candidate, font=font, stroke_width=3)[2] > max_line_width:
+            if line_words and measure.textbbox((0, 0), candidate, font=font, stroke_width=2)[2] > max_line_width:
                 lines.append(line_words)
                 line_words = []
             line_words.append(word)
@@ -474,27 +474,29 @@ class VideoAssembler:
             lines.append(line_words)
         lines = lines[:2]
         line_texts = [" ".join(words) for words in lines]
-        padding_y, gap = 16, 8
-        line_boxes = [measure.textbbox((0, 0), line, font=font, stroke_width=3) for line in line_texts]
+        padding_y = 14
+        line_boxes = [measure.textbbox((0, 0), line, font=font, stroke_width=2) for line in line_texts]
+        line_heights = [box[3] - box[1] for box in line_boxes]
+        font_size = getattr(font, "size", max(line_heights, default=1))
+        line_advance = max(max(line_heights, default=1), int(round(font_size * 1.5)))
         text_w = max((box[2] - box[0] for box in line_boxes), default=1)
-        text_h = sum(box[3] - box[1] for box in line_boxes) + gap * max(0, len(lines) - 1)
+        text_h = line_advance * len(lines)
         width = min(frame_w, text_w + 16)
         height = text_h + padding_y * 2 + 8
         image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         shadow_draw = ImageDraw.Draw(shadow)
-        y = padding_y
         positions = []
-        for line, box in zip(line_texts, line_boxes):
-            line_h = box[3] - box[1]
+        for index, (line, box, line_h) in enumerate(zip(line_texts, line_boxes, line_heights)):
             line_w = box[2] - box[0]
-            position = ((width - line_w) / 2, y - box[1])
-            positions.append((position, y))
-            shadow_draw.text((position[0] + 2, position[1] + 3), line, font=font,
-                             fill=(0, 0, 0, 225), stroke_width=5, stroke_fill=(0, 0, 0, 235))
-            y += line_h + gap
+            row_y = padding_y + index * line_advance
+            glyph_y = row_y + (line_advance - line_h) // 2
+            position = ((width - line_w) / 2, glyph_y - box[1])
+            positions.append((position, glyph_y))
+            shadow_draw.text((position[0] + 1, position[1] + 2), line, font=font,
+                             fill=(0, 0, 0, 145), stroke_width=3, stroke_fill=(0, 0, 0, 165))
         from PIL import ImageFilter
-        image.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(radius=2.4)))
+        image.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(radius=1.5)))
         draw = ImageDraw.Draw(image)
         active_index = 0
         space_width = measure.textlength(" ", font=font)
@@ -503,7 +505,7 @@ class VideoAssembler:
             for word in words:
                 color = (255, 220, 92, 255) if active_index == highlight_index else (255, 255, 255, 255)
                 draw.text((x, line_y - box[1]), word, font=font, fill=color,
-                          stroke_width=3, stroke_fill=(5, 7, 12, 255))
+                          stroke_width=2, stroke_fill=(5, 7, 12, 220))
                 x += measure.textlength(word, font=font) + space_width
                 active_index += 1
         return image
