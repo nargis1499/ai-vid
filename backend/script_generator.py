@@ -26,6 +26,110 @@ class ScriptGenerator:
                 print(f"[script] Ollama unavailable; using template: {exc}")
         return self._fallback(title, duration, count)
 
+    def generate_custom_script(self, title: str, custom_text: str, duration: int) -> dict:
+        """Keep creator narration verbatim while planning visuals scene by scene."""
+        text = str(custom_text or "").strip()
+        if not text:
+            raise ValueError("A custom narration script is required.")
+        if len(text) > 40000:
+            raise ValueError("A custom narration script must be 40,000 characters or fewer.")
+
+        pieces = []
+        sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", text) if part.strip()]
+        for sentence in sentences:
+            if len(sentence.split()) <= 48:
+                pieces.append(sentence)
+                continue
+            clauses = [part.strip() for part in re.split(r"(?<=[,;:])\s+", sentence) if part.strip()]
+            for clause in clauses:
+                words = clause.split()
+                if len(words) <= 48:
+                    pieces.append(clause)
+                else:
+                    pieces.extend(" ".join(words[i:i+42]) for i in range(0, len(words), 42))
+        if not pieces:
+            pieces = [text]
+
+        word_count = sum(len(piece.split()) for piece in pieces)
+        target_scene_count = max(1, min(24, (word_count + 41) // 42))
+        scene_count = min(target_scene_count, len(pieces))
+        groups = []
+        piece_index = 0
+        remaining_words = word_count
+        for group_index in range(scene_count):
+            groups_left = scene_count - group_index
+            if groups_left == 1:
+                groups.append(" ".join(pieces[piece_index:]))
+                break
+            target_words = max(1, (remaining_words + groups_left - 1) // groups_left)
+            group = []
+            group_words = 0
+            while piece_index < len(pieces) - (groups_left - 1) and (not group or group_words < target_words):
+                piece = pieces[piece_index]
+                group.append(piece)
+                piece_words = len(piece.split())
+                group_words += piece_words
+                remaining_words -= piece_words
+                piece_index += 1
+            groups.append(" ".join(group))
+
+        scene_duration = max(5, int(duration) // max(1, len(groups)))
+        scenes = []
+        for index, narration in enumerate(groups, 1):
+            keywords = self._script_keywords(title, narration)
+            scenes.append({
+                "scene_number": index,
+                "duration": scene_duration,
+                "narration": narration,
+                "visual_description": f"Cinematic visual illustrating this narration: {narration[:240]}",
+                "search_keywords": keywords,
+                "text_overlay": " ".join(re.findall(r"[\w'-]+", narration)[:6])[:38] or str(title)[:38],
+            })
+        self._enrich_custom_scenes(title, scenes)
+        return {
+            "title": str(title),
+            "description": f"Creator-provided narration for {title}: {text[:700]}",
+            "scenes": scenes,
+            "tags": re.findall(r"[\w]+", str(title).lower())[:8] or ["youtube"],
+        }
+
+    def _enrich_custom_scenes(self, title, scenes):
+        """Ask Ollama for matching visuals only; never let it rewrite the voiceover."""
+        if not self.enabled:
+            return
+        scene_briefs = [{"scene_number": scene["scene_number"], "narration": scene["narration"][:900]} for scene in scenes]
+        prompt = (
+            f"Plan concise video visuals for the title {title!r}. For each supplied scene, return only JSON "
+            "with a scenes array containing visual_description, search_keywords, and text_overlay. "
+            "Do not write, edit, shorten, or return narration. Keep the same scene count and order. "
+            f"Input scene narration: {json.dumps(scene_briefs, ensure_ascii=False)}"
+        )
+        try:
+            response = requests.post(
+                self.url + "/api/generate",
+                json={"model": self.model, "prompt": prompt, "stream": False,
+                      "keep_alive": -1 if env_bool("OLLAMA_KEEP_ALIVE", True) else 0,
+                      "options": {"temperature": .35}},
+                timeout=120,
+            )
+            response.raise_for_status()
+            raw = response.json().get("response", "")
+            raw = re.sub(r"^\s*```(?:json)?|```\s*$", "", raw.strip(), flags=re.I)
+            data = json.loads(raw[raw.find("{"):raw.rfind("}")+1])
+            for scene, visual in zip(scenes, data.get("scenes", [])):
+                for key in ("visual_description", "search_keywords", "text_overlay"):
+                    value = visual.get(key)
+                    if isinstance(value, str) and value.strip():
+                        scene[key] = value.strip()
+        except Exception as exc:
+            print(f"[script] Could not enrich custom-script visuals; using narration-based visuals: {exc}")
+
+    @staticmethod
+    def _script_keywords(title, narration):
+        stop = {"about", "after", "again", "against", "also", "because", "before", "being", "between", "could", "during", "from", "have", "into", "just", "more", "most", "over", "same", "some", "such", "than", "that", "their", "there", "these", "they", "this", "those", "through", "under", "very", "were", "what", "when", "where", "which", "while", "with", "would", "your", "you", "the", "and", "for", "are", "was", "but", "not", "our", "its", "then", "them", "will", "can", "how", "why"}
+        words = [word for word in re.findall(r"[\w'-]+", narration.lower()) if len(word) > 3 and word not in stop]
+        return ", ".join([str(title).strip()] + list(dict.fromkeys(words[:5]))).strip(", ")
+
     @staticmethod
     def _normalize(data, title, duration, count):
         scenes = data.get("scenes", [])[:count]
