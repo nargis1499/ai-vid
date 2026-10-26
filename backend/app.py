@@ -162,10 +162,10 @@ def create_batch():
         custom_scripts=[str(script or "").strip() for script in custom_scripts]
         if any(not script for script in custom_scripts):return jsonify({"error":"Each custom script must contain narration text."}),400
         if any(len(script)>40000 for script in custom_scripts):return jsonify({"error":"Each custom script must be 40,000 characters or fewer."}),400
-    try:duration=max(30,min(1800,int(body.get("duration",120))))
-    except (TypeError,ValueError):return jsonify({"error":"duration must be a number of seconds"}),400
+    try:duration=max(10,min(1800,int(body.get("duration",120))))
+    except (TypeError,ValueError):return jsonify({"error":"duration must be a number of seconds (at least 10)"}),400
     resolution=str(body.get("resolution","720p")).lower()
-    if resolution not in {"720p","1080p"}:return jsonify({"error":"resolution must be 720p or 1080p"}),400
+    if resolution not in {"720x480","720p","1080p"}:return jsonify({"error":"resolution must be 720x480, 720p, or 1080p"}),400
     voice_speed=str(body.get("voice_speed","medium")).lower()
     if voice_speed not in {"slow","medium","faster"}:return jsonify({"error":"voice_speed must be slow, medium, or faster"}),400
     niche=str(body.get("niche","General"))[:80];privacy=body.get("privacy",os.getenv("YOUTUBE_PRIVACY_STATUS","private"))

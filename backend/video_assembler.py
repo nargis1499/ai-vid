@@ -77,9 +77,9 @@ class VideoAssembler:
                progress_callback=None, video_title: str | None = None,
                resolution: str = "720p", use_nvenc: bool = True,
                stage_callback=None, cancel_check=None) -> str:
-        output_size = {"720p": (1280, 720), "1080p": (1920, 1080)}.get(str(resolution).lower())
+        output_size = {"720x480": (720, 480), "720p": (1280, 720), "1080p": (1920, 1080)}.get(str(resolution).lower())
         if output_size is None:
-            raise ValueError("resolution must be 720p or 1080p")
+            raise ValueError("resolution must be 720x480, 720p, or 1080p")
         target_width, target_height = output_size
         self.last_music_style = None
         self.last_music_error = None
