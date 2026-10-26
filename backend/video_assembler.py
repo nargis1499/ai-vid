@@ -10,15 +10,75 @@ class VideoAssembler:
     TRANSITION_DURATION = 0.5
     TRANSITION_STYLES = ("crossfade", "slide-left", "zoom-push", "slide-up")
 
+    def __init__(self):
+        self.last_video_encoder = None
+        self.encoding_active = False
+        self._nvenc_unavailable_binary = None
+
+    def _encode_video(self, final, path, ffmpeg_binary, allow_nvenc, logger):
+        path = Path(path)
+        ffmpeg_key = str(ffmpeg_binary)
+        use_nvenc = allow_nvenc and self._nvenc_unavailable_binary != ffmpeg_key
+        attempts = []
+        if use_nvenc:
+            attempts.append(("NVIDIA NVENC", "h264_nvenc", "p5",
+                             ["-rc", "vbr", "-cq", "19", "-b:v", "0"],
+                             path.with_name(f"{path.stem}.nvenc-temp.mp4"),
+                             path.with_name(f"{path.stem}.nvenc-audio.m4a")))
+        attempts.append(("CPU libx264", "libx264", "medium", [],
+                         path.with_name(f"{path.stem}.x264-temp.mp4"),
+                         path.with_name(f"{path.stem}.x264-audio.m4a")))
+
+        nvenc_error = None
+        for label, codec, preset, ffmpeg_params, temp_path, temp_audio in attempts:
+            self.last_video_encoder = label
+            self.encoding_active = True
+            try:
+                for stale in (temp_path, temp_audio):
+                    try:
+                        stale.unlink()
+                    except OSError:
+                        pass
+                final.write_videofile(
+                    str(temp_path), fps=30, codec=codec, audio_codec="aac",
+                    preset=preset, threads=4, logger=logger,
+                    temp_audiofile=str(temp_audio), ffmpeg_params=ffmpeg_params)
+                if not temp_path.is_file() or temp_path.stat().st_size == 0:
+                    raise RuntimeError(f"{label} did not produce a video file")
+                os.replace(temp_path, path)
+                self.last_video_encoder = label
+                print(f"[video] Encoded {path.name} using {label}")
+                return
+            except Exception as exc:
+                if codec == "h264_nvenc":
+                    nvenc_error = exc
+                    self._nvenc_unavailable_binary = ffmpeg_key
+                    print(f"[video] NVENC unavailable; falling back to CPU libx264: {exc}")
+                else:
+                    if nvenc_error:
+                        raise RuntimeError(
+                            f"NVENC encoding failed ({nvenc_error}); CPU libx264 fallback failed ({exc})."
+                        ) from exc
+                    raise
+            finally:
+                self.encoding_active = False
+                for stale in (temp_path, temp_audio):
+                    try:
+                        stale.unlink()
+                    except OSError:
+                        pass
+
     def create(self, script: dict, media_items: list, audio_paths: list, video_id: str,
                progress_callback=None, video_title: str | None = None,
-               resolution: str = "720p") -> str:
+               resolution: str = "720p", use_nvenc: bool = True) -> str:
         output_size = {"720p": (1280, 720), "1080p": (1920, 1080)}.get(str(resolution).lower())
         if output_size is None:
             raise ValueError("resolution must be 720p or 1080p")
         target_width, target_height = output_size
         self.last_music_style = None
         self.last_music_error = None
+        self.last_video_encoder = None
+        self.encoding_active = False
         try:
             from PIL import Image
             # MoviePy 1.x still references Image.ANTIALIAS, removed by Pillow 10.
@@ -170,8 +230,7 @@ class VideoAssembler:
                 final = final.set_audio(faded_audio)
 
             path = DIRS["videos"] / f"{video_id}.mp4"
-            final.write_videofile(str(path), fps=30, codec="libx264", audio_codec="aac",
-                                  preset="medium", threads=4, logger=moviepy_logger)
+            self._encode_video(final, path, FFMPEG_BINARY, use_nvenc, moviepy_logger)
             if progress_callback:
                 progress_callback(1.0)
             return str(path)

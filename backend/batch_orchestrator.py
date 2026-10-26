@@ -125,7 +125,8 @@ class BatchOrchestrator:
         try:
             def assembly_progress(fraction):
                 report(60+int(22*max(0,min(1,fraction))),"assembly",f"Encoding video… {int(100*max(0,min(1,fraction)))}%")
-            video_path=self.assembler.create(script,media,audio_paths,base,progress_callback=assembly_progress,video_title=title,resolution=resolution);result["video_path"]=video_path
+            video_path=self.assembler.create(script,media,audio_paths,base,progress_callback=assembly_progress,video_title=title,resolution=resolution,use_nvenc=env_bool("USE_NVENC",True));result["video_path"]=video_path
+            result["video_encoder"]=self.assembler.last_video_encoder
             subtitle_path=os.path.splitext(video_path)[0]+".srt"
             result["subtitle_path"]=subtitle_path if os.path.isfile(subtitle_path) else None
             steps["assembly"]="done";steps["subtitles"]="done" if result["subtitle_path"] else "failed";steps["music"]="done" if self.assembler.last_music_style else "fallback"
