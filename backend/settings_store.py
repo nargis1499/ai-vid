@@ -31,6 +31,7 @@ DEFAULTS = {
     "USE_LOCAL_IMAGES": False,
     "USE_NVENC": True,
     "PEXELS_API_KEY": "",
+    "PIXABAY_API_KEY": "",
     "YOUTUBE_PRIVACY_STATUS": "private",
     "YOUTUBE_CATEGORY_ID": "22",
     "MAX_UPLOADS_PER_DAY": 5,
@@ -40,7 +41,7 @@ DEFAULTS = {
     "OUTPUT_DIR": "",
 }
 BOOL_KEYS = {"USE_OLLAMA", "OLLAMA_AUTO_START", "OLLAMA_KEEP_ALIVE", "USE_LOCAL_IMAGES", "USE_NVENC"}
-PUBLIC_KEYS = set(DEFAULTS) - {"PEXELS_API_KEY", "OPENROUTER_API_KEY"}
+PUBLIC_KEYS = set(DEFAULTS) - {"PEXELS_API_KEY", "PIXABAY_API_KEY", "OPENROUTER_API_KEY"}
 
 
 def load_settings():
@@ -71,7 +72,7 @@ def save_settings(updates):
             current[key] = value is True or str(value).strip().lower() in {"true", "1", "yes", "on"}
         elif key in {"MAX_UPLOADS_PER_DAY", "BATCH_DELAY_SECONDS", "GPU_MEMORY_LIMIT_GB"}:
             current[key] = int(value)
-        elif key in {"PEXELS_API_KEY", "OPENROUTER_API_KEY"}:
+        elif key in {"PEXELS_API_KEY", "PIXABAY_API_KEY", "OPENROUTER_API_KEY"}:
             current[key] = str(value or "").strip()
         else:
             current[key] = str(value).strip()
@@ -122,6 +123,7 @@ def public_settings(settings=None):
     settings = settings or load_settings()
     result = {key: settings[key] for key in PUBLIC_KEYS}
     result["PEXELS_API_KEY_CONFIGURED"] = bool(settings.get("PEXELS_API_KEY"))
+    result["PIXABAY_API_KEY_CONFIGURED"] = bool(settings.get("PIXABAY_API_KEY"))
     result["OPENROUTER_API_KEY_CONFIGURED"] = bool(settings.get("OPENROUTER_API_KEY"))
     result["YOUTUBE_CREDENTIALS_CONFIGURED"] = (APP_DATA_DIR / "client_secret.json").is_file() or (Path(__file__).resolve().parent / "client_secret.json").is_file()
     return result

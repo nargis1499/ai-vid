@@ -22,7 +22,7 @@ After packaging, open the EXE like a normal desktop app. CreatorFlow starts its 
 Open **Settings** in the header. Configure:
 
 - **Scripts and Ollama:** choose local Ollama drafting or an OpenRouter free text model. In OpenRouter mode, the hosted model creates a draft and Ollama is required to analyze, edit, and finalize it locally; drafts are never used if local review fails. Add the OpenRouter key in Settings, select a model from the live free-model list, and keep Ollama enabled. The key is stored in your per-user settings file and is not returned to the browser. Ollama also prepares metadata and reviews custom scripts. At launch CreatorFlow looks for Ollama; if installed, it starts the local service when needed and loads the selected model if it is already downloaded. If the model is missing, use **Download model** in Settings. Model downloads are explicit because they can be several GB.
-- **Visuals:** CreatorFlow searches Pexels first and chooses the closest available clip, accepting weaker matches if needed. It uses a local SDXL still only when no usable clip is returned and that option is enabled; otherwise it falls back to a Pexels still or a generated gradient. Fallback stills use standard scene transitions; local video diffusion is not used.
+- **Visuals:** CreatorFlow searches Pexels first, then Pixabay for the closest available stock clip, accepting weaker matches if needed. If no usable clip is found, it downloads a Pexels or Pixabay stock still; optional local SDXL still generation is used only when no stock image is available. Search responses are cached locally for 24 hours, and selected media is downloaded locally rather than hotlinked. Fallback stills use standard scene transitions; local video diffusion is not used. Pixabay's official API does not offer music search, so background music continues to be generated locally.
 - **Narration and captions:** Chatterbox is the default natural-sounding local voice engine. Edge TTS remains selectable, with the OS voice as a final fallback. Burned-in, word-highlight captions use bundled Montserrat SemiBold with no background box; downloaded SRT captions are plain text. On Windows, run `.\\backend\\setup_chatterbox_windows.ps1` in PowerShell to install Chatterbox into a separate Python environment; this keeps the app's PyTorch 2.2 GPU stack intact. The first Chatterbox voiceover downloads its model weights. You can set a custom Chatterbox Python path in Settings if needed.
 - **YouTube and batches:** select default privacy/category, daily upload cap, delay between titles, and the output folder. Use the file picker in Settings to add the Google Desktop OAuth JSON.
 
@@ -42,11 +42,11 @@ The Ollama badge shows **Running** when the selected model is loaded, **Idle · 
 - Windows 10/11; Python 3.11 is only required for building from source, not for running the packaged app.
 - FFmpeg on PATH for MP4 export.
 - Ollama installed locally for local LLM scripts and metadata. Install Ollama from [ollama.com](https://ollama.com/download). You can download the default model in the app or run `ollama pull qwen2.5:7b` separately.
-- Pexels API key for stock photos and clips (optional; gradient/still fallbacks are built in).
+- Pexels and/or Pixabay API key for stock photos and clips (optional; add keys in app Settings). Pixabay supports image/video search only; music remains locally generated.
 - NVIDIA GPU and CUDA-enabled packaged build for local diffusion models (optional; initial model weights are large).
 - Google OAuth JSON for YouTube uploads (optional).
 
-Ollama itself is a separate local program; CreatorFlow can start its service and run an installed model, but it does not install Ollama silently. Without a Pexels key, images fall back to locally generated gradients. Local SDXL image fallback is optional and off until enabled in Settings. Chatterbox runs locally when its optional isolated runtime is installed; Edge TTS uses Microsoft's online service, and the app tries the installed operating-system voice if Edge TTS fails.
+Ollama itself is a separate local program; CreatorFlow can start its service and run an installed model, but it does not install Ollama silently. Without Pexels or Pixabay keys, the app uses locally generated gradients. Local SDXL image fallback is optional and off until enabled in Settings. Chatterbox runs locally when its optional isolated runtime is installed; Edge TTS uses Microsoft's online service, and the app tries the installed operating-system voice if Edge TTS fails.
 
 ## Build from source / developer mode
 
@@ -64,7 +64,7 @@ The desktop-specific dependencies are in `backend/requirements-desktop.txt`. The
 - **MP4 export says MoviePy/FFmpeg is required:** in Settings, set FFmpeg executable to `ffmpeg-imageio` (default) or the full path from `where.exe ffmpeg`. The packaging script bundles MoviePy, NumPy, ImageIO and the FFmpeg binary. The assembler reports the underlying import/FFmpeg error instead of hiding it. For source installs, reinstall `moviepy==1.0.3` and `imageio-ffmpeg` in the app environment.
 - **Other MP4 export failures:** install FFmpeg and add the directory containing `ffmpeg.exe` to PATH, then relaunch CreatorFlow.
 - **No voiceover:** Edge TTS requires internet access. The app now tries the local Windows speech voice if Edge TTS fails; if neither produces valid audio, it marks the video failed instead of exporting a silent MP4. Rebuild the desktop EXE to include the offline TTS fallback.
-- **No stock visuals:** add a valid Pexels key in Settings; generated gradients/stills are used otherwise.
+- **No stock visuals:** add a valid Pexels or Pixabay key in Settings; generated gradients/stills are used otherwise.
 - **YouTube OAuth issue:** verify that the Data API is enabled and the Desktop OAuth client is selected in Settings. Test users may need to be added to the Google consent screen.
 - **Pillow/MoviePy compatibility:** the video assembler includes a compatibility alias for the legacy MoviePy 1.x `Image.ANTIALIAS` reference.
 
