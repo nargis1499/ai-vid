@@ -31,7 +31,7 @@ class YouTubeUploader:
         self.authenticate(False) if self.service is None else None
         count=self._uploads_today()
         return {"connected":self.service is not None,"uploads_today":count,"max_uploads_per_day":self.max_uploads,"error":self.last_error}
-    def upload_video(self,video_path:str,seo:dict,thumbnail_path:str,privacy=None,progress_callback=None)->dict:
+    def upload_video(self,video_path:str,seo:dict,thumbnail_path:str,privacy=None,progress_callback=None,cancel_check=None)->dict:
         if self.service is None and not self.authenticate(True):return {"success":False,"error":self.last_error or "YouTube authentication failed"}
         if self._uploads_today()>=self.max_uploads:return {"success":False,"error":"Daily upload limit reached."}
         try:
@@ -41,7 +41,11 @@ class YouTubeUploader:
             media=MediaFileUpload(video_path,chunksize=10*1024*1024,resumable=True)
             request=self.service.videos().insert(part="snippet,status",body=body,media_body=media);response=None
             while response is None:
+                if cancel_check:
+                    cancel_check()
                 status,response=request.next_chunk()
+                if response is None and cancel_check:
+                    cancel_check()
                 if progress_callback and status is not None:
                     progress_callback(max(0.0,min(1.0,float(status.progress()))))
             if progress_callback:progress_callback(1.0)
@@ -52,6 +56,8 @@ class YouTubeUploader:
             except Exception as exc:print(f"[youtube] Comment post failed: {exc}")
             self._record_upload();return {"success":True,"video_id":video_id,"url":f"https://youtube.com/watch?v={video_id}"}
         except Exception as exc:
+            if cancel_check:
+                cancel_check()
             if "quotaExceeded" in str(exc):return {"success":False,"error":"YouTube API quota exceeded. Uploading stopped for today."}
             return {"success":False,"error":str(exc)}
     def _uploads_today(self):

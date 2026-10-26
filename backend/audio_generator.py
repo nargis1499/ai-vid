@@ -14,6 +14,10 @@ from common import DIRS
 from settings_store import APP_DATA_DIR
 
 
+class NarrationCancelled(RuntimeError):
+    """Raised when a user stops narration generation."""
+
+
 class AudioGenerator:
     def __init__(self):
         self.voice = os.getenv("EDGE_TTS_VOICE", "en-US-AriaNeural")
@@ -29,6 +33,8 @@ class AudioGenerator:
         self._worker_lock = threading.Lock()
         self._worker_failure = ""
         self._worker_failure_interpreter = ""
+        self._cancel_requested = False
+        self.last_speed = "medium"
 
     def configure(self, engine=None, chatterbox_python=None):
         engine_changed = False
@@ -47,9 +53,14 @@ class AudioGenerator:
             self._worker_failure_interpreter = ""
             self._stop_chatterbox_worker()
 
-    def generate(self, text: str, index: int) -> str:
+    def generate(self, text: str, index: int, speed: str = "medium", cancel_check=None) -> str:
         if not str(text or "").strip():
             raise RuntimeError("The scene has no narration text to speak.")
+        speed = str(speed or "medium").strip().lower()
+        if speed not in {"slow", "medium", "faster"}:
+            raise ValueError("Voiceover pace must be Slow, Medium, or Faster.")
+        self._cancel_requested = False
+        self.last_speed = speed
         self.last_warning = ""
         self.last_device = ""
         mp3_path = DIRS["audio"] / f"narration_{index}.mp3"
@@ -60,26 +71,76 @@ class AudioGenerator:
             except OSError:
                 pass
 
+        if cancel_check:
+            cancel_check()
         chatterbox_error = ""
+        result = None
         if self.voice_engine == "chatterbox":
             try:
                 result = self._generate_chatterbox(text, wav_path)
                 self.last_engine = "Chatterbox"
-                return result
             except Exception as exc:
+                if self._cancel_requested:
+                    raise NarrationCancelled("Voiceover stopped by user.") from exc
                 self._worker_failure = f"{type(exc).__name__}: {exc}"
                 self._worker_failure_interpreter = self._chatterbox_interpreter()
                 chatterbox_error = self._worker_failure
                 self._stop_chatterbox_worker()
 
-        result = self._generate_edge_or_system(text, mp3_path, wav_path)
-        if chatterbox_error:
-            self.last_warning = (
-                f"Chatterbox was unavailable ({chatterbox_error}); this scene used {self.last_engine} instead. "
-                "Install the optional Chatterbox runtime or choose Edge TTS in Settings."
-            )
-            print(f"[audio] {self.last_warning}")
-        return result
+        if result is None:
+            if cancel_check:
+                cancel_check()
+            result = self._generate_edge_or_system(text, mp3_path, wav_path)
+            if chatterbox_error:
+                self.last_warning = (
+                    f"Chatterbox was unavailable ({chatterbox_error}); this scene used {self.last_engine} instead. "
+                    "Install the optional Chatterbox runtime or choose Edge TTS in Settings."
+                )
+                print(f"[audio] {self.last_warning}")
+        if self._cancel_requested:
+            raise NarrationCancelled("Voiceover stopped by user.")
+        if cancel_check:
+            cancel_check()
+        return self._apply_voice_speed(result, speed)
+
+    def cancel_current(self):
+        """Stop an active Chatterbox subprocess; other engines stop at their next checkpoint."""
+        self._cancel_requested = True
+        worker = self._worker
+        if worker is not None and worker.poll() is None:
+            self._stop_chatterbox_worker()
+
+    @staticmethod
+    def _apply_voice_speed(path: str, speed: str) -> str:
+        rates = {"slow": 0.86, "medium": 1.0, "faster": 1.12}
+        rate = rates[speed]
+        if rate == 1.0:
+            return path
+        source = Path(path)
+        temporary = source.with_name(f"{source.stem}.paced{source.suffix}")
+        try:
+            from moviepy.config import FFMPEG_BINARY
+            command = [
+                FFMPEG_BINARY, "-hide_banner", "-loglevel", "error", "-y",
+                "-i", str(source), "-filter:a", f"atempo={rate}", "-vn",
+            ]
+            if source.suffix.lower() == ".wav":
+                command.extend(["-c:a", "pcm_s16le"])
+            else:
+                command.extend(["-c:a", "libmp3lame", "-q:a", "2"])
+            command.append(str(temporary))
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=300, check=False)
+            if completed.returncode or not temporary.is_file() or temporary.stat().st_size == 0:
+                detail = (completed.stderr or "FFmpeg did not create a paced audio file.").strip()[-500:]
+                raise RuntimeError(detail)
+            os.replace(temporary, source)
+            return str(source)
+        except Exception as exc:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise RuntimeError(f"Could not apply the selected voiceover pace: {exc}") from exc
 
     def _generate_edge_or_system(self, text: str, mp3_path: Path, wav_path: Path) -> str:
         edge_error = None
@@ -174,11 +235,13 @@ class AudioGenerator:
     def _send_worker_request(self, action: str, **payload):
         with self._worker_lock:
             self._ensure_chatterbox_worker()
+            worker = self._worker
+            responses = self._responses
             request_id = uuid.uuid4().hex
             request = {"id": request_id, "action": action, **payload}
             try:
-                self._worker.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
-                self._worker.stdin.flush()
+                worker.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
+                worker.stdin.flush()
             except (BrokenPipeError, OSError, AttributeError) as exc:
                 self._stop_chatterbox_worker()
                 raise RuntimeError(f"Chatterbox worker stopped unexpectedly: {exc}") from exc
@@ -186,7 +249,7 @@ class AudioGenerator:
             timeout = 900 if action == "generate" else 60
             while True:
                 try:
-                    line = self._responses.get(timeout=timeout)
+                    line = responses.get(timeout=timeout)
                 except queue.Empty as exc:
                     self._stop_chatterbox_worker()
                     raise TimeoutError(f"Chatterbox did not respond within {timeout} seconds.") from exc
