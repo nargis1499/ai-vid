@@ -277,7 +277,7 @@ class BatchOrchestrator:
                 self._check_cancel(batch_id)
                 pct=45+int(15*i/max(1,len(scenes)))
                 engine_label="local Chatterbox (Edge TTS fallback available)" if self.audio.voice_engine == "chatterbox" else "Edge TTS (offline voice fallback available)"
-                pace_label={"slow":"Slow","medium":"Medium","faster":"Faster"}[voice_speed]
+                pace_label={"slower":"Slower","slow":"Slow","medium":"Medium","faster":"Faster"}[voice_speed]
                 report(pct,"audio",f"Generating narration {i+1} of {len(scenes)} with {engine_label} · {pace_label} pace…")
                 try:
                     audio_path=self.audio.generate(scene.get("narration",title),serial*100+i,speed=voice_speed,cancel_check=lambda:self._check_cancel(batch_id))

@@ -57,8 +57,8 @@ class AudioGenerator:
         if not str(text or "").strip():
             raise RuntimeError("The scene has no narration text to speak.")
         speed = str(speed or "medium").strip().lower()
-        if speed not in {"slow", "medium", "faster"}:
-            raise ValueError("Voiceover pace must be Slow, Medium, or Faster.")
+        if speed not in {"slower", "slow", "medium", "faster"}:
+            raise ValueError("Voiceover pace must be Slower, Slow, Medium, or Faster.")
         self._cancel_requested = False
         self.last_speed = speed
         self.last_warning = ""
@@ -112,7 +112,7 @@ class AudioGenerator:
 
     @staticmethod
     def _apply_voice_speed(path: str, speed: str) -> str:
-        rates = {"slow": 0.86, "medium": 1.0, "faster": 1.12}
+        rates = {"slower": 0.72, "slow": 0.86, "medium": 1.0, "faster": 1.12}
         rate = rates[speed]
         if rate == 1.0:
             return path
