@@ -344,7 +344,7 @@ class BatchOrchestrator:
         report(88,"thumbnail","Creating a branded thumbnail from the scene visuals and title graphics…")
         thumbnail_background=next((item.get("path") for item in media if item and item.get("type")=="image"),None)
         try:
-            thumb=self.thumbnails.generate(seo,title,serial,background_path=thumbnail_background)
+            thumb=self.thumbnails.generate(seo,title,serial,background_path=thumbnail_background,scenes=scenes,media_items=media)
             self._check_cancel(batch_id)
             result["thumbnail_path"]=thumb;steps["thumbnail"]="done"
             report(92,"thumbnail","Thumbnail artwork ready",{"thumbnail":"done"})
