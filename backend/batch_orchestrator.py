@@ -146,19 +146,29 @@ class BatchOrchestrator:
         clip_summary="Stock or AI motion clips ready" if steps["clips"]=="done" else "Using still-image motion and transitions"
         report(45,"clips",clip_summary,{"clips":steps["clips"]})
         audio_paths=[]
-        for i,scene in enumerate(scenes):
-            pct=45+int(15*i/max(1,len(scenes)))
-            report(pct,"audio",f"Generating narration {i+1} of {len(scenes)} with Edge TTS (offline voice fallback available)…")
-            try:
-                audio_path=self.audio.generate(scene.get("narration",title),serial*100+i)
-                if not os.path.isfile(audio_path) or os.path.getsize(audio_path)==0:
-                    raise RuntimeError("Narration output is missing or empty.")
-                audio_paths.append(audio_path)
-                report(45+int(15*(i+1)/max(1,len(scenes))),"audio",f"Narration audio {i+1} of {len(scenes)} ready")
-            except Exception as exc:
-                steps["audio"]="failed"
-                result["error"]=f"Voiceover generation failed in scene {i+1}: {exc}"
-                report(pct,"audio",result["error"],{"audio":"failed"});return result
+        if self.audio.voice_engine == "chatterbox":
+            # Ollama may otherwise occupy most of an 8 GB GPU while Chatterbox loads.
+            self._release_ollama_for_gpu()
+        try:
+            for i,scene in enumerate(scenes):
+                pct=45+int(15*i/max(1,len(scenes)))
+                engine_label="local Chatterbox (Edge TTS fallback available)" if self.audio.voice_engine == "chatterbox" else "Edge TTS (offline voice fallback available)"
+                report(pct,"audio",f"Generating narration {i+1} of {len(scenes)} with {engine_label}…")
+                try:
+                    audio_path=self.audio.generate(scene.get("narration",title),serial*100+i)
+                    if not os.path.isfile(audio_path) or os.path.getsize(audio_path)==0:
+                        raise RuntimeError("Narration output is missing or empty.")
+                    audio_paths.append(audio_path)
+                    if self.audio.last_warning and not result.get("voice_warning"):
+                        result["voice_warning"]=self.audio.last_warning
+                        result["voice_fallback_engine"]=self.audio.last_engine
+                    report(45+int(15*(i+1)/max(1,len(scenes))),"audio",f"Narration audio {i+1} of {len(scenes)} ready with {self.audio.last_engine}")
+                except Exception as exc:
+                    steps["audio"]="failed"
+                    result["error"]=f"Voiceover generation failed in scene {i+1}: {exc}"
+                    report(pct,"audio",result["error"],{"audio":"failed"});return result
+        finally:
+            self.audio.release_chatterbox_model()
         steps["audio"]="done" if audio_paths else "failed"
         report(60,"audio",f"Narration ready for {len(audio_paths)} scene(s)",{"audio":steps["audio"]})
         report(60,"assembly","Arranging scene order and preparing transitions…")

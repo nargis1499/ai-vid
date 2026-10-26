@@ -23,6 +23,8 @@ DEFAULTS = {
     "OLLAMA_AUTO_START": True,
     "OLLAMA_KEEP_ALIVE": True,
     "EDGE_TTS_VOICE": "en-US-AriaNeural",
+    "TTS_ENGINE": "chatterbox",
+    "CHATTERBOX_PYTHON": "",
     "USE_LOCAL_IMAGES": False,
     "USE_LOCAL_VIDEO": False,
     "USE_NVENC": True,
@@ -71,6 +73,8 @@ def save_settings(updates):
             current[key] = str(value or "").strip()
         else:
             current[key] = str(value).strip()
+    if current["TTS_ENGINE"] not in {"chatterbox", "edge"}:
+        raise ValueError("Narration voice engine must be Chatterbox or Edge TTS.")
     if current["YOUTUBE_PRIVACY_STATUS"] not in {"private", "unlisted", "public"}:
         raise ValueError("YouTube privacy must be private, unlisted, or public.")
     if not current["OLLAMA_MODEL"].strip():
