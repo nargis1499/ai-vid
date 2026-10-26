@@ -6,7 +6,7 @@ $runtime = Join-Path $env:APPDATA 'CreatorFlow\chatterbox-venv'
 $python = Join-Path $runtime 'Scripts\python.exe'
 
 if (-not (Test-Path $python)) {
-    Write-Host 'Creating an isolated Chatterbox environment. This will not change CreatorFlow\'s pinned AI packages.' -ForegroundColor Cyan
+    Write-Host "Creating an isolated Chatterbox environment. This will not change CreatorFlow's pinned AI packages." -ForegroundColor Cyan
     py -3.11 -m venv $runtime
     if ($LASTEXITCODE -ne 0) { throw 'Python 3.11 was not found. Install Python 3.11, then run this script again.' }
 }
