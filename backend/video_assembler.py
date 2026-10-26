@@ -9,8 +9,21 @@ class VideoAssembler:
             # MoviePy 1.x still references Image.ANTIALIAS, removed in Pillow 10.
             if not hasattr(Image, "ANTIALIAS"):
                 Image.ANTIALIAS = Image.Resampling.LANCZOS
+        except Exception as exc:
+            raise RuntimeError(f"Pillow could not be loaded ({type(exc).__name__}: {exc}). Reinstall the app's media dependencies.") from exc
+        try:
             from moviepy.editor import (AudioFileClip, ImageClip, VideoFileClip, concatenate_videoclips)
-        except Exception as exc:raise RuntimeError("MoviePy/FFmpeg is required to assemble videos") from exc
+            from moviepy.config import FFMPEG_BINARY
+        except Exception as exc:
+            raise RuntimeError(f"MoviePy could not be loaded ({type(exc).__name__}: {exc}). The desktop build may be missing MoviePy; rebuild it with the latest packaging script or reinstall moviepy==1.0.3.") from exc
+        try:
+            import subprocess
+            check=subprocess.run([FFMPEG_BINARY, "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=10, check=False)
+            if check.returncode:
+                detail=check.stderr.decode(errors="replace")[-400:]
+                raise RuntimeError(detail or f"FFmpeg exited with code {check.returncode}")
+        except Exception as exc:
+            raise RuntimeError(f"FFmpeg could not be started from {FFMPEG_BINARY!r} ({type(exc).__name__}: {exc}). Set a valid ffmpeg.exe in CreatorFlow Settings or rebuild with imageio-ffmpeg bundled.") from exc
         clips=[];audios=[]
         try:
             for i,item in enumerate(media_items):

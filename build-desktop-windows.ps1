@@ -27,8 +27,13 @@ try {
     & $venvPython -m PyInstaller --noconfirm --clean --windowed --onedir `
         --name CreatorFlow `
         --add-data "$repoRoot\frontend;frontend" `
-        --collect-all webview `
+        --collect-all moviepy `
+        --collect-all imageio `
         --collect-all imageio_ffmpeg `
+        --collect-all proglog `
+        --collect-all decorator `
+        --copy-metadata moviepy `
+        --collect-all webview `
         --collect-all clr_loader `
         --collect-all pythonnet `
         --hidden-import webview.platforms.edgechromium `
