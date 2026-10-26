@@ -190,6 +190,15 @@ def get_video(batch_id,index):
     path=batch["videos"][index].get("video_path")
     if not path or not Path(path).is_file():return jsonify({"error":"Video is not ready"}),404
     return send_file(path,as_attachment=True,download_name=Path(path).name)
+
+@app.get("/api/subtitles/<batch_id>/<int:index>")
+def get_subtitles(batch_id,index):
+    batch=orchestrator.get_status(batch_id)
+    if not batch or index<0 or index>=len(batch["videos"]):return jsonify({"error":"Subtitle file not found"}),404
+    path=batch["videos"][index].get("subtitle_path")
+    if not path or not Path(path).is_file():return jsonify({"error":"Subtitles are not ready"}),404
+    return send_file(path,as_attachment=True,download_name=Path(path).name,mimetype="application/x-subrip")
+
 @app.get("/api/settings")
 def get_settings():
     return jsonify(public_settings())
