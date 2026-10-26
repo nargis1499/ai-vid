@@ -1,5 +1,6 @@
 """Flask API and static frontend for YouTube Auto Creator."""
 import os
+import time
 import requests
 from pathlib import Path
 from flask import Flask, jsonify, request, send_file, send_from_directory
@@ -24,6 +25,47 @@ app.config["MAX_CONTENT_LENGTH"]=100*1024*1024
 orchestrator=BatchOrchestrator()
 app.config["OLLAMA_RUNTIME"]=OllamaRuntime(load_settings)
 FRONTEND=ROOT_DIR/"frontend"
+_OPENROUTER_FREE_MODELS_CACHE={"loaded_at":0.0,"models":[]}
+
+def _openrouter_free_models():
+    """Return only free text-output models, cached briefly to keep Settings responsive."""
+    now=time.time()
+    cached=_OPENROUTER_FREE_MODELS_CACHE
+    if cached["models"] and now-cached["loaded_at"]<600:
+        return cached["models"]
+    response=requests.get(
+        "https://openrouter.ai/api/v1/models",
+        timeout=20,
+        headers={"Accept":"application/json","X-Title":"CreatorFlow"},
+    )
+    response.raise_for_status()
+    payload=response.json()
+    if not isinstance(payload,dict) or not isinstance(payload.get("data"),list):
+        raise ValueError("OpenRouter returned an invalid model catalog response.")
+    models=[]
+    for item in payload["data"]:
+        if not isinstance(item,dict):
+            continue
+        model_id=str(item.get("id") or "").strip()
+        if not model_id:
+            continue
+        free_variant=model_id.endswith(":free") or model_id=="openrouter/free"
+        if not free_variant:
+            continue
+        architecture=item.get("architecture") or {}
+        modalities=architecture.get("output_modalities") if isinstance(architecture,dict) else None
+        if not isinstance(modalities,list) or "text" not in {str(value).lower() for value in modalities}:
+            continue
+        models.append({
+            "id":model_id,
+            "name":str(item.get("name") or model_id),
+            "context_length":item.get("context_length"),
+        })
+    models.sort(key=lambda item:(item["name"].lower(),item["id"].lower()))
+    if not models:
+        raise ValueError("OpenRouter returned no free text-generation models.")
+    cached.update(loaded_at=now,models=models)
+    return models
 
 def _apply_runtime_settings(settings):
     apply_environment(settings)
@@ -36,6 +78,9 @@ def _apply_runtime_settings(settings):
     orchestrator.scripts.enabled=env_bool("USE_OLLAMA", True)
     orchestrator.scripts.url=os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
     orchestrator.scripts.model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+    orchestrator.scripts.provider=os.getenv("SCRIPT_PROVIDER", "ollama").strip().lower()
+    orchestrator.scripts.openrouter_api_key=os.getenv("OPENROUTER_API_KEY", "").strip()
+    orchestrator.scripts.openrouter_model=os.getenv("OPENROUTER_MODEL", "").strip()
     orchestrator.seo.enabled=orchestrator.scripts.enabled
     orchestrator.seo.url=orchestrator.scripts.url
     orchestrator.seo.model=orchestrator.scripts.model
@@ -218,6 +263,13 @@ def get_subtitles(batch_id,index):
     if not path or not Path(path).is_file():return jsonify({"error":"Subtitles are not ready"}),404
     return send_file(path,as_attachment=True,download_name=Path(path).name,mimetype="application/x-subrip")
 
+@app.get("/api/openrouter/free-models")
+def openrouter_free_models():
+    try:
+        return jsonify({"models":_openrouter_free_models()})
+    except (requests.RequestException,ValueError,TypeError) as exc:
+        return jsonify({"error":f"Could not load OpenRouter's free text models: {exc}"}),502
+
 @app.get("/api/settings")
 def get_settings():
     return jsonify(public_settings())
@@ -225,12 +277,16 @@ def get_settings():
 @app.post("/api/settings")
 def update_settings():
     body=request.get_json(silent=True) or {}
-    allowed=set(public_settings())-{"PEXELS_API_KEY_CONFIGURED", "YOUTUBE_CREDENTIALS_CONFIGURED"}
+    allowed=set(public_settings())-{"PEXELS_API_KEY_CONFIGURED", "OPENROUTER_API_KEY_CONFIGURED", "YOUTUBE_CREDENTIALS_CONFIGURED"}
     updates={key:value for key,value in body.items() if key in allowed}
     if body.get("PEXELS_API_KEY"):
         updates["PEXELS_API_KEY"]=str(body["PEXELS_API_KEY"]).strip()
     elif body.get("CLEAR_PEXELS_API_KEY"):
         updates["PEXELS_API_KEY"]=""
+    if body.get("OPENROUTER_API_KEY"):
+        updates["OPENROUTER_API_KEY"]=str(body["OPENROUTER_API_KEY"]).strip()
+    elif body.get("CLEAR_OPENROUTER_API_KEY"):
+        updates["OPENROUTER_API_KEY"]=""
     try:
         settings=save_settings(updates)
         _apply_runtime_settings(settings)
