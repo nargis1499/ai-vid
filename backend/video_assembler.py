@@ -91,7 +91,7 @@ class VideoAssembler:
         except Exception as exc:
             raise RuntimeError(f"Pillow could not be loaded ({type(exc).__name__}: {exc}). Reinstall the app's media dependencies.") from exc
         try:
-            from moviepy.editor import (AudioFileClip, ImageClip, VideoFileClip,
+            from moviepy.editor import (AudioFileClip, ImageClip, VideoClip, VideoFileClip,
                                         concatenate_videoclips, CompositeVideoClip)
             from moviepy.audio.AudioClip import CompositeAudioClip
             from moviepy.audio.fx.all import audio_fadein, audio_fadeout, audio_loop
@@ -198,7 +198,7 @@ class VideoAssembler:
             title = video_title or script.get("title") or "Video"
 
             # Captions use the exact revised narration and follow each scene's transition-aware start time.
-            if stage_callback:stage_callback("subtitles","Creating timed English caption cues and the downloadable SRT file…")
+            if stage_callback:stage_callback("subtitles","Building word-by-word voice-synced captions and the downloadable SRT file…")
             subtitle_clips, subtitle_entries = self._make_subtitles(
                 scenes, speech_durations, scene_starts, final.duration, final.size
             )
@@ -207,7 +207,7 @@ class VideoAssembler:
             if subtitle_clips:
                 captioned = CompositeVideoClip([final] + subtitle_clips, size=final.size)
                 final = captioned.set_duration(final.duration)
-            if stage_callback:stage_callback("subtitles",f"Timed captions ready ({len(subtitle_entries)} cue(s)); SRT saved.")
+            if stage_callback:stage_callback("subtitles",f"Word-highlight captions ready ({len(subtitle_entries)} phrase cue(s)); SRT saved.")
 
             # A deterministic, original instrumental loop is selected by title keywords.
             if stage_callback:stage_callback("music","Choosing and mixing a title-matched instrumental soundtrack…")
@@ -282,36 +282,115 @@ class VideoAssembler:
 
     @classmethod
     def _make_subtitles(cls, scenes, speech_durations, scene_starts, video_duration, frame_size):
+        import bisect
         import numpy as np
+        from functools import lru_cache
         from PIL import Image, ImageDraw, ImageFont
-        from moviepy.editor import ImageClip
+        from moviepy.editor import VideoClip
 
         frame_w, frame_h = int(frame_size[0]), int(frame_size[1])
         font = cls._subtitle_font(ImageFont, max(32, int(frame_h * 0.058)))
-        cue_clips = []
         entries = []
-        for i, scene in enumerate(scenes):
-            if i >= len(speech_durations) or i >= len(scene_starts):
+        chunks_by_key = {}
+        word_states = []
+        max_overlay_w = 1
+        max_overlay_h = 1
+
+        for scene_index, scene in enumerate(scenes):
+            if scene_index >= len(speech_durations) or scene_index >= len(scene_starts):
                 break
             narration = str(scene.get("narration") or "").strip()
+            words = narration.split()
+            if not words:
+                continue
+            word_durations = cls._word_durations(words, max(0.01, float(speech_durations[scene_index])))
             chunks = cls._caption_chunks(narration)
-            total_words = sum(len(chunk.split()) for chunk in chunks)
-            speech_duration = speech_durations[i]
-            if chunks and total_words:
-                cue_cursor = 0.0
-                for chunk in chunks:
-                    cue_duration = speech_duration * len(chunk.split()) / total_words
-                    start = min(video_duration, scene_starts[i] + cue_cursor)
-                    end = min(video_duration, start + cue_duration)
-                    if end - start > 0.08:
-                        image = cls._caption_image(chunk, Image, ImageDraw, ImageFont, font, frame_w)
-                        x = max(0, (frame_w - image.width) // 2)
-                        y = max(0, frame_h - image.height - int(frame_h * 0.055))
-                        overlay = ImageClip(np.asarray(image), transparent=True)
-                        cue_clips.append(overlay.set_start(start).set_duration(end - start).set_position((x, y)))
-                        entries.append((start, end, chunk))
-                    cue_cursor += cue_duration
-        return cue_clips, entries
+            word_index = 0
+            word_cursor = 0.0
+            speech_start = float(scene_starts[scene_index])
+
+            for chunk_index, chunk in enumerate(chunks):
+                chunk_words = chunk.split()
+                if not chunk_words:
+                    continue
+                chunk_start = min(float(video_duration), speech_start + word_cursor)
+                chunks_by_key[(scene_index, chunk_index)] = chunk
+                for local_word_index in range(len(chunk_words)):
+                    word_duration = word_durations[word_index + local_word_index]
+                    word_start = min(float(video_duration), speech_start + word_cursor)
+                    word_cursor += word_duration
+                    word_end = min(float(video_duration), speech_start + word_cursor)
+                    if word_end > word_start:
+                        word_states.append((word_start, word_end, scene_index, chunk_index, local_word_index))
+                chunk_end = min(float(video_duration), speech_start + word_cursor)
+                if chunk_end - chunk_start > 0.04:
+                    entries.append((chunk_start, chunk_end, chunk))
+                layout = cls._caption_image(chunk, Image, ImageDraw, ImageFont, font, frame_w, highlight_index=0)
+                max_overlay_w = max(max_overlay_w, layout.width)
+                max_overlay_h = max(max_overlay_h, layout.height)
+                layout.close()
+                word_index += len(chunk_words)
+
+        if not word_states:
+            return [], entries
+
+        overlay_size = (max_overlay_w, max_overlay_h)
+        overlay_x = max(0, (frame_w - max_overlay_w) // 2)
+        overlay_y = max(0, frame_h - max_overlay_h - int(frame_h * 0.055))
+        blank_rgb = np.zeros((max_overlay_h, max_overlay_w, 3), dtype=np.uint8)
+        blank_mask = np.zeros((max_overlay_h, max_overlay_w), dtype=np.float32)
+        word_starts = [state[0] for state in word_states]
+        overlay_start = max(0.0, word_states[0][0])
+        overlay_end = min(float(video_duration), word_states[-1][1])
+        overlay_duration = max(0.01, overlay_end - overlay_start)
+
+        @lru_cache(maxsize=8)
+        def rendered_word_state(scene_index, chunk_index, active_word_index):
+            text = chunks_by_key[(scene_index, chunk_index)]
+            image = cls._caption_image(text, Image, ImageDraw, ImageFont, font,
+                                       frame_w, highlight_index=active_word_index)
+            canvas = Image.new("RGBA", overlay_size, (0, 0, 0, 0))
+            canvas.alpha_composite(image, ((max_overlay_w - image.width) // 2,
+                                           max_overlay_h - image.height))
+            rgb = np.asarray(canvas.convert("RGB"), dtype=np.uint8).copy()
+            alpha = np.asarray(canvas.getchannel("A"), dtype=np.float32).copy() / 255.0
+            return rgb, alpha
+
+        def state_at(local_time):
+            absolute_time = overlay_start + float(local_time)
+            state_index = bisect.bisect_right(word_starts, absolute_time) - 1
+            if state_index < 0:
+                return blank_rgb, blank_mask
+            start, end, scene_index, chunk_index, active_word_index = word_states[state_index]
+            if absolute_time >= end:
+                return blank_rgb, blank_mask
+            return rendered_word_state(scene_index, chunk_index, active_word_index)
+
+        rgb_clip = VideoClip(lambda t: state_at(t)[0], duration=overlay_duration)
+        alpha_clip = VideoClip(lambda t: state_at(t)[1], ismask=True, duration=overlay_duration)
+        subtitle = (rgb_clip.set_mask(alpha_clip).set_start(overlay_start)
+                    .set_duration(overlay_duration).set_position((overlay_x, overlay_y)))
+        return [subtitle], entries
+
+    @staticmethod
+    def _word_durations(words, speech_duration):
+        """Estimate word boundaries from the actual voice clip duration and spoken-word shape."""
+        if not words:
+            return []
+        weights = []
+        for word in words:
+            letters = re.sub(r"[^\w]", "", word, flags=re.UNICODE)
+            syllables = max(1, len(re.findall(r"[aeiouy]+", letters.lower())))
+            weight = 0.6 + len(letters) * 0.11 + max(0, syllables - 1) * 0.16
+            if re.search(r"[,;:]$", word):
+                weight += 0.22
+            elif re.search(r"[.!?][\"')\]]?$", word):
+                weight += 0.42
+            elif re.search(r"[-—–]$", word):
+                weight += 0.14
+            weights.append(weight)
+        total = sum(weights) or len(words)
+        return [float(speech_duration) * weight / total for weight in weights]
 
     @staticmethod
     def _caption_chunks(text, max_words=8, max_chars=60):
@@ -353,47 +432,55 @@ class VideoAssembler:
         return ImageFont.load_default()
 
     @staticmethod
-    def _caption_image(text, Image, ImageDraw, ImageFont, font, frame_w):
+    def _caption_image(text, Image, ImageDraw, ImageFont, font, frame_w, highlight_index=None):
+        """Render clean word-highlight captions with text shadow and no backing box."""
         max_line_width = int(frame_w * 0.90)
         helper = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
         measure = ImageDraw.Draw(helper)
         lines = []
-        line = ""
+        line_words = []
         for word in str(text).split():
-            candidate = f"{line} {word}".strip()
-            if line and measure.textbbox((0, 0), candidate, font=font, stroke_width=3)[2] > max_line_width:
-                lines.append(line)
-                line = word
-            else:
-                line = candidate
-        if line:
-            lines.append(line)
+            candidate = " ".join(line_words + [word])
+            if line_words and measure.textbbox((0, 0), candidate, font=font, stroke_width=3)[2] > max_line_width:
+                lines.append(line_words)
+                line_words = []
+            line_words.append(word)
+        if line_words:
+            lines.append(line_words)
         lines = lines[:2]
-        padding_x, padding_y, gap = 18, 16, 8
-        line_boxes = [measure.textbbox((0, 0), line, font=font, stroke_width=3) for line in lines]
+        line_texts = [" ".join(words) for words in lines]
+        padding_y, gap = 16, 8
+        line_boxes = [measure.textbbox((0, 0), line, font=font, stroke_width=3) for line in line_texts]
         text_w = max((box[2] - box[0] for box in line_boxes), default=1)
         text_h = sum(box[3] - box[1] for box in line_boxes) + gap * max(0, len(lines) - 1)
-        width = min(frame_w, text_w + padding_x * 2 + 8)
+        width = min(frame_w, text_w + 16)
         height = text_h + padding_y * 2 + 8
         image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         shadow_draw = ImageDraw.Draw(shadow)
         y = padding_y
         positions = []
-        for line, box in zip(lines, line_boxes):
+        for line, box in zip(line_texts, line_boxes):
             line_h = box[3] - box[1]
             line_w = box[2] - box[0]
             position = ((width - line_w) / 2, y - box[1])
-            positions.append((line, position))
+            positions.append((position, y))
             shadow_draw.text((position[0] + 2, position[1] + 3), line, font=font,
                              fill=(0, 0, 0, 225), stroke_width=5, stroke_fill=(0, 0, 0, 235))
             y += line_h + gap
         from PIL import ImageFilter
         image.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(radius=2.4)))
         draw = ImageDraw.Draw(image)
-        for line, position in positions:
-            draw.text(position, line, font=font, fill=(255, 255, 255, 255),
-                      stroke_width=3, stroke_fill=(5, 7, 12, 255))
+        active_index = 0
+        space_width = measure.textlength(" ", font=font)
+        for words, (position, line_y), box in zip(lines, positions, line_boxes):
+            x = position[0] - box[0]
+            for word in words:
+                color = (255, 220, 92, 255) if active_index == highlight_index else (255, 255, 255, 255)
+                draw.text((x, line_y - box[1]), word, font=font, fill=color,
+                          stroke_width=3, stroke_fill=(5, 7, 12, 255))
+                x += measure.textlength(word, font=font) + space_width
+                active_index += 1
         return image
 
     @staticmethod
