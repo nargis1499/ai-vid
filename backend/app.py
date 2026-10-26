@@ -50,6 +50,40 @@ def _apply_runtime_settings(settings):
         else:
             runtime.deactivate()
 
+def _gpu_status():
+    status=orchestrator.local.gpu_status()
+    if status.get("in_use"):
+        return status
+    if env_bool("USE_OLLAMA",True):
+        base_url=os.getenv("OLLAMA_URL","http://localhost:11434").rstrip("/")
+        model_name=os.getenv("OLLAMA_MODEL","qwen2.5:7b").lower()
+        try:
+            response=requests.get(base_url+"/api/ps",timeout=1)
+            response.raise_for_status()
+            loaded=response.json().get("models",[])
+            ollama_busy=False
+            with orchestrator.lock:
+                for batch in orchestrator.batches.values():
+                    for video in batch.get("videos",[]):
+                        if video.get("status")=="processing" and video.get("current_stage") in {"script","seo"}:
+                            ollama_busy=True;break
+                    if ollama_busy:break
+            for model in loaded:
+                name=str(model.get("name") or model.get("model") or "").lower()
+                if name==model_name or name==model_name+":latest":
+                    vram=int(model.get("size_vram") or 0)
+                    if vram>0:
+                        model_label=model.get("name") or model_name
+                        status.update(available=True,device=status.get("device") or "Ollama GPU",vram_used_gb=round(vram/(1024**3),1),loaded=True,operation=f"Ollama · {model_label}")
+                        if ollama_busy:
+                            status.update(state="active",in_use=True,message=f"GPU in use by Ollama · {model_label}")
+                        else:
+                            status.update(state="loaded",in_use=False,message=f"Ollama model loaded in GPU memory · idle · {model_label}")
+                        return status
+        except (requests.RequestException,ValueError,TypeError):
+            pass
+    return status
+
 @app.get("/")
 def index():return send_from_directory(FRONTEND,"index.html")
 @app.get("/<path:filename>")
@@ -73,7 +107,13 @@ def create_batch():
 @app.get("/api/batch/status/<batch_id>")
 def batch_status(batch_id):
     state=orchestrator.get_status(batch_id)
-    return (jsonify(state),200) if state else (jsonify({"error":"Batch not found"}),404)
+    if not state:return jsonify({"error":"Batch not found"}),404
+    state["gpu_status"]=_gpu_status()
+    return jsonify(state)
+
+@app.get("/api/gpu/status")
+def gpu_status():
+    return jsonify(_gpu_status())
 @app.get("/api/batch/list")
 def batch_list():return jsonify({"batches":orchestrator.list_batches()})
 @app.post("/api/youtube/auth")
