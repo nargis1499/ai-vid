@@ -115,36 +115,68 @@ class BatchOrchestrator:
             report(8,"script",result["error"],{"script":"failed"});return result
         if env_bool("USE_LOCAL_IMAGES",False) or env_bool("USE_LOCAL_VIDEO",False):
             self._release_ollama_for_gpu()
-        media=[];scene_images=[]
         scenes=script.get("scenes",[])
+        scene_images=[None]*len(scenes)
+        media=[None]*len(scenes)
+        stock_video_count=0
+        local_images=env_bool("USE_LOCAL_IMAGES",False) and self.local.available
+
+        # Prefer a relevant real stock clip for each scene. Only generate a custom still
+        # when Pexels has no sufficiently relevant result (or no API key is configured).
         for i,scene in enumerate(scenes):
             pct=8+int(20*i/max(1,len(scenes)))
-            local_images=env_bool("USE_LOCAL_IMAGES",False) and self.local.available
-            source="local SDXL image model" if local_images else "Pexels stock search" if self.images.api_key else "visual fallback renderer"
-            report(pct,"images",f"Creating scene visual {i+1} of {len(scenes)} with {source}…")
-            path=self.local.generate_image(scene.get("visual_description",title),serial*100+i)
-            if not path:
-                if local_images:report(pct,"images",f"Local image generation unavailable for scene {i+1}; switching to stock/fallback visuals…")
-                path=self.images.generate_scene_image(scene,serial*100+i)
-            scene_images.append(path);media.append({"type":"image","path":path})
-            report(8+int(20*(i+1)/max(1,len(scenes))),"images",f"Scene visual {i+1} of {len(scenes)} ready")
-        steps["images"]="done" if scene_images else "failed"
-        report(28,"images",f"Created {len(scene_images)} scene visual(s)",{"images":steps["images"]})
-        # Try image-to-video in sequence; failed scenes retain their still image.
+            search_query=(scene.get("search_keywords") or scene.get("visual_description")
+                          or scene.get("narration") or title)
+            if self.fetcher.api_key:
+                report(pct,"images",f"Searching for the best matching stock footage for scene {i+1} of {len(scenes)}…")
+                stock_clip=self.fetcher.fetch_clip(search_query,serial*100+i,min_dur=5)
+            else:
+                stock_clip=None
+                report(pct,"images",f"No Pexels key configured; preparing a fallback visual for scene {i+1} of {len(scenes)}…")
+
+            if stock_clip:
+                media[i]={"type":"video","path":stock_clip}
+                stock_video_count+=1
+                report(8+int(20*(i+1)/max(1,len(scenes))),"images",f"Best-match stock footage selected for scene {i+1} of {len(scenes)}")
+                continue
+
+            if local_images:
+                report(pct,"images",f"No relevant stock clip found; creating a local SDXL fallback for scene {i+1}…")
+                image_path=self.local.generate_image(scene.get("visual_description",title),serial*100+i)
+                if not image_path:
+                    report(pct,"images",f"Local SDXL unavailable for scene {i+1}; switching to a stock still or gradient…")
+                    image_path=self.images.generate_scene_image(scene,serial*100+i)
+            else:
+                if self.fetcher.api_key:
+                    report(pct,"images",f"No relevant stock clip found; preparing a stock still or gradient for scene {i+1}…")
+                image_path=self.images.generate_scene_image(scene,serial*100+i)
+            scene_images[i]=image_path
+            media[i]={"type":"image","path":image_path}
+            report(8+int(20*(i+1)/max(1,len(scenes))),"images",f"Fallback visual ready for scene {i+1} of {len(scenes)}")
+
+        steps["images"]="done" if scenes and all(media) else "failed"
+        fallback_count=sum(1 for item in media if item and item["type"]=="image")
+        report(28,"images",f"Selected stock footage for {stock_video_count} scene(s); prepared still visuals for {fallback_count}",{"images":steps["images"]})
+
+        # Animate only fallback stills. A selected stock clip already provides motion
+        # and should not be replaced with an AI animation.
+        local_video=env_bool("USE_LOCAL_VIDEO",False) and self.local.available
         for i,scene in enumerate(scenes):
             pct=28+int(17*i/max(1,len(scenes)))
-            local_video=env_bool("USE_LOCAL_VIDEO",False) and self.local.available
-            message=f"Animating scene {i+1} of {len(scenes)} with Stable Video Diffusion…" if local_video else f"Searching stock footage for scene {i+1} of {len(scenes)}…"
-            report(pct,"clips",message)
-            clip=self.local.generate_video_clip(scene_images[i],scene.get("visual_description",title),serial*100+i)
-            if not clip:
-                if local_video:report(pct,"clips",f"Local animation unavailable for scene {i+1}; searching stock footage…")
-                clip=self.fetcher.fetch_clip(scene.get("search_keywords",title),serial*100+i,min_dur=5)
-            if clip:media[i]={"type":"video","path":clip}
-            else:report(pct,"clips",f"No motion clip found for scene {i+1}; will use the still image with animated transitions…")
-            report(28+int(17*(i+1)/max(1,len(scenes))),"clips",f"Scene {i+1} motion option ready")
-        steps["clips"]="done" if any(m["type"]=="video" for m in media) else "fallback"
-        clip_summary="Stock or AI motion clips ready" if steps["clips"]=="done" else "Using still-image motion and transitions"
+            if media[i] and media[i]["type"]=="video":
+                report(pct,"clips",f"Keeping the selected stock footage for scene {i+1} of {len(scenes)}…")
+            elif local_video and scene_images[i]:
+                report(pct,"clips",f"Animating fallback visual {i+1} of {len(scenes)} with Stable Video Diffusion…")
+                clip=self.local.generate_video_clip(scene_images[i],scene.get("visual_description",title),serial*100+i)
+                if clip:
+                    media[i]={"type":"video","path":clip}
+                else:
+                    report(pct,"clips",f"Local animation unavailable for scene {i+1}; keeping its still visual…")
+            else:
+                report(pct,"clips",f"Using the still visual for scene {i+1} of {len(scenes)} with animated transitions…")
+            report(28+int(17*(i+1)/max(1,len(scenes))),"clips",f"Scene {i+1} visual motion ready")
+        steps["clips"]="done" if any(m and m["type"]=="video" for m in media) else "fallback"
+        clip_summary=f"Stock footage or local animation ready for {sum(1 for m in media if m and m['type']=='video')} scene(s)" if steps["clips"]=="done" else "Using still-image motion and transitions"
         report(45,"clips",clip_summary,{"clips":steps["clips"]})
         audio_paths=[]
         if self.audio.voice_engine == "chatterbox":

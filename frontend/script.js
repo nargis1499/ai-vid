@@ -1,8 +1,8 @@
 const $=s=>document.querySelector(s);const titlesEl=$('#titles');let activeBatch=null,pollTimer=null,toastTimer;
 const VIDEO_STEPS=[
  {key:'script',label:'Script & scene plan',hint:'Draft narration, review it locally, or revise your custom script.'},
- {key:'images',label:'Create scene visuals',hint:'Generate visuals with local AI, stock search, or fallback artwork.'},
- {key:'clips',label:'Find or generate motion clips',hint:'Animate scenes or find matching stock footage.'},
+ {key:'images',label:'Find footage & create visuals',hint:'Use the best-matching stock clip first; create a local SDXL fallback when it is not relevant.'},
+ {key:'clips',label:'Animate fallback visuals',hint:'Keep selected stock clips or animate unmatched stills with Stable Video Diffusion when enabled.'},
  {key:'audio',label:'Generate voice narration',hint:'Create spoken audio for each scene.'},
  {key:'assembly',label:'Assemble scenes & transitions',hint:'Arrange scene timing and apply transitions.'},
  {key:'subtitles',label:'Create captions & SRT',hint:'Time English captions and save the subtitle file.'},
