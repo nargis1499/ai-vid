@@ -1,42 +1,117 @@
-"""Generate real narration with Edge TTS and an offline OS-voice fallback."""
+"""Generate narration with Chatterbox, Edge TTS, or an offline OS voice."""
 import asyncio
+import json
 import os
+import queue
+import subprocess
+import sys
+import threading
+import uuid
 import wave
 from pathlib import Path
+
 from common import DIRS
+from settings_store import APP_DATA_DIR
+
 
 class AudioGenerator:
-    def __init__(self): self.voice = os.getenv("EDGE_TTS_VOICE", "en-US-AriaNeural")
+    def __init__(self):
+        self.voice = os.getenv("EDGE_TTS_VOICE", "en-US-AriaNeural")
+        self.voice_engine = os.getenv("TTS_ENGINE", "chatterbox").strip().lower()
+        self.chatterbox_python = os.getenv("CHATTERBOX_PYTHON", "").strip()
+        self.last_engine = ""
+        self.last_warning = ""
+        self.last_device = ""
+        self.chatterbox_active = False
+        self._worker = None
+        self._worker_key = None
+        self._responses = None
+        self._worker_lock = threading.Lock()
+        self._worker_failure = ""
+        self._worker_failure_interpreter = ""
+
+    def configure(self, engine=None, chatterbox_python=None):
+        engine_changed = False
+        if engine is not None:
+            normalized_engine = str(engine).strip().lower()
+            engine_changed = normalized_engine != self.voice_engine
+            self.voice_engine = normalized_engine
+        interpreter_changed = False
+        if chatterbox_python is not None:
+            value = str(chatterbox_python).strip()
+            interpreter_changed = value != self.chatterbox_python
+            if interpreter_changed:
+                self.chatterbox_python = value
+        if engine_changed or interpreter_changed:
+            self._worker_failure = ""
+            self._worker_failure_interpreter = ""
+            self._stop_chatterbox_worker()
 
     def generate(self, text: str, index: int) -> str:
         if not str(text or "").strip():
             raise RuntimeError("The scene has no narration text to speak.")
+        self.last_warning = ""
+        self.last_device = ""
         mp3_path = DIRS["audio"] / f"narration_{index}.mp3"
         wav_path = DIRS["audio"] / f"narration_{index}.wav"
         for old_path in (mp3_path, wav_path):
-            try: old_path.unlink(missing_ok=True)
-            except OSError: pass
+            try:
+                old_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        chatterbox_error = ""
+        if self.voice_engine == "chatterbox":
+            try:
+                result = self._generate_chatterbox(text, wav_path)
+                self.last_engine = "Chatterbox"
+                return result
+            except Exception as exc:
+                self._worker_failure = f"{type(exc).__name__}: {exc}"
+                self._worker_failure_interpreter = self._chatterbox_interpreter()
+                chatterbox_error = self._worker_failure
+                self._stop_chatterbox_worker()
+
+        result = self._generate_edge_or_system(text, mp3_path, wav_path)
+        if chatterbox_error:
+            self.last_warning = (
+                f"Chatterbox was unavailable ({chatterbox_error}); this scene used {self.last_engine} instead. "
+                "Install the optional Chatterbox runtime or choose Edge TTS in Settings."
+            )
+            print(f"[audio] {self.last_warning}")
+        return result
+
+    def _generate_edge_or_system(self, text: str, mp3_path: Path, wav_path: Path) -> str:
         edge_error = None
         try:
             import edge_tts
+
             async def save():
                 await edge_tts.Communicate(text, self.voice).save(str(mp3_path))
+
             try:
                 asyncio.run(save())
             except RuntimeError:
                 loop = asyncio.new_event_loop()
-                try: loop.run_until_complete(save())
-                finally: loop.close()
+                try:
+                    loop.run_until_complete(save())
+                finally:
+                    loop.close()
             if not mp3_path.is_file() or mp3_path.stat().st_size < 512:
                 raise RuntimeError("Edge TTS returned an empty or incomplete audio file.")
+            self.last_engine = f"Edge TTS ({self.voice})"
             return str(mp3_path)
         except Exception as exc:
             edge_error = exc
-            try: mp3_path.unlink(missing_ok=True)
-            except OSError: pass
+            try:
+                mp3_path.unlink(missing_ok=True)
+            except OSError:
+                pass
             print(f"[audio] Edge TTS failed; trying the computer's offline voice: {exc}")
         try:
-            return self._generate_system_voice(text, wav_path)
+            result = self._generate_system_voice(text, wav_path)
+            self.last_engine = "offline system voice"
+            return result
         except Exception as exc:
             if isinstance(exc, ModuleNotFoundError) and exc.name == "pyttsx3":
                 fallback_hint = "Install the updated speech packages into the same Python environment running Flask with `python -m pip install --upgrade edge-tts==7.3.1 pyttsx3==2.99`, then restart the web backend."
@@ -47,6 +122,141 @@ class AudioGenerator:
                 f"offline system TTS failed ({type(exc).__name__}: {exc}). {fallback_hint} "
                 "The Edge TTS package was updated; if its WebSocket still returns HTTP 403, the Edge speech service or network is rejecting the connection."
             ) from exc
+
+    def _chatterbox_interpreter(self) -> str:
+        if self.chatterbox_python:
+            return self.chatterbox_python
+        app_data_python = APP_DATA_DIR / "chatterbox-venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        if app_data_python.is_file():
+            return str(app_data_python)
+        return sys.executable
+
+    def _ensure_chatterbox_worker(self):
+        interpreter = self._chatterbox_interpreter()
+        worker_script = Path(__file__).with_name("chatterbox_worker.py")
+        if not worker_script.is_file():
+            raise RuntimeError(f"Chatterbox worker script is missing: {worker_script}")
+        key = (interpreter, str(worker_script))
+        if self._worker is not None and self._worker.poll() is None and key == self._worker_key:
+            return
+        self._stop_chatterbox_worker()
+        responses = queue.Queue()
+        kwargs = {}
+        if os.name == "nt":
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            worker = subprocess.Popen(
+                [interpreter, str(worker_script)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                bufsize=1,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                **kwargs,
+            )
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(f"Could not start Chatterbox using Python at '{interpreter}': {exc}") from exc
+
+        def read_responses():
+            try:
+                for line in worker.stdout:
+                    responses.put(line)
+            finally:
+                responses.put(None)
+
+        threading.Thread(target=read_responses, daemon=True, name="chatterbox-stdout").start()
+        self._worker = worker
+        self._worker_key = key
+        self._responses = responses
+
+    def _send_worker_request(self, action: str, **payload):
+        with self._worker_lock:
+            self._ensure_chatterbox_worker()
+            request_id = uuid.uuid4().hex
+            request = {"id": request_id, "action": action, **payload}
+            try:
+                self._worker.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
+                self._worker.stdin.flush()
+            except (BrokenPipeError, OSError, AttributeError) as exc:
+                self._stop_chatterbox_worker()
+                raise RuntimeError(f"Chatterbox worker stopped unexpectedly: {exc}") from exc
+
+            timeout = 900 if action == "generate" else 60
+            while True:
+                try:
+                    line = self._responses.get(timeout=timeout)
+                except queue.Empty as exc:
+                    self._stop_chatterbox_worker()
+                    raise TimeoutError(f"Chatterbox did not respond within {timeout} seconds.") from exc
+                if line is None:
+                    self._stop_chatterbox_worker()
+                    raise RuntimeError("Chatterbox worker exited without returning a result.")
+                try:
+                    response = json.loads(line)
+                except json.JSONDecodeError:
+                    # Ignore incidental library output; stdout is normally reserved for JSON.
+                    continue
+                if response.get("id") != request_id:
+                    continue
+                if not response.get("ok"):
+                    raise RuntimeError(response.get("error") or "Chatterbox generation failed.")
+                if response.get("status") == "generating":
+                    self.last_device = str(response.get("device") or "")
+                    continue
+                return response
+
+    def _generate_chatterbox(self, text: str, path: Path) -> str:
+        current_interpreter = self._chatterbox_interpreter()
+        if self._worker_failure and current_interpreter == self._worker_failure_interpreter:
+            raise RuntimeError(self._worker_failure)
+        if current_interpreter != self._worker_failure_interpreter:
+            self._worker_failure = ""
+            self._worker_failure_interpreter = ""
+        self.chatterbox_active = True
+        try:
+            response = self._send_worker_request("generate", text=text, output_path=str(path))
+        finally:
+            self.chatterbox_active = False
+        if not path.is_file() or path.stat().st_size < 2048:
+            raise RuntimeError("Chatterbox returned an empty or incomplete WAV file.")
+        with wave.open(str(path), "rb") as audio:
+            if audio.getnframes() == 0 or audio.getframerate() == 0:
+                raise RuntimeError("Chatterbox created an invalid WAV file.")
+        self.last_device = str(response.get("device") or "")
+        return str(path)
+
+    def release_chatterbox_model(self):
+        """Free Chatterbox GPU memory after a video's narration is complete."""
+        if self._worker is None or self._worker.poll() is not None or self._worker_failure:
+            return
+        try:
+            self._send_worker_request("release")
+        except Exception as exc:
+            print(f"[audio] Could not release Chatterbox model cleanly: {exc}")
+            self._stop_chatterbox_worker()
+
+    def _stop_chatterbox_worker(self):
+        worker = self._worker
+        self._worker = None
+        self._worker_key = None
+        self._responses = None
+        if worker is None:
+            return
+        try:
+            if worker.stdin:
+                worker.stdin.close()
+        except OSError:
+            pass
+        try:
+            worker.terminate()
+            worker.wait(timeout=5)
+        except Exception:
+            try:
+                worker.kill()
+            except Exception:
+                pass
 
     def _generate_system_voice(self, text: str, path: Path) -> str:
         import pyttsx3
@@ -64,8 +274,10 @@ class AudioGenerator:
             engine.save_to_file(text, str(path))
             engine.runAndWait()
         finally:
-            try: engine.stop()
-            except Exception: pass
+            try:
+                engine.stop()
+            except Exception:
+                pass
         if not path.is_file() or path.stat().st_size < 2048:
             raise RuntimeError("The system speech engine did not create a usable WAV file.")
         with wave.open(str(path), "rb") as audio:

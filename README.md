@@ -22,7 +22,8 @@ After packaging, open the EXE like a normal desktop app. CreatorFlow starts its 
 Open **Settings** in the header. Configure:
 
 - **Ollama:** enable/disable it, set the model and service URL (optionally enter a custom Ollama executable path), choose whether to start the service automatically, and keep the model loaded. At launch CreatorFlow looks for Ollama; if installed, it starts the local service when needed and loads the selected model if it is already downloaded. If the model is missing, use **Download model** in Settings. Model downloads are explicit because they can be several GB.
-- **Visuals:** enable SDXL Turbo and Stable Video Diffusion if your packaged PyTorch build and GPU support them, set a Pexels key, and choose the narration voice.
+- **Visuals:** enable SDXL Turbo and Stable Video Diffusion if your packaged PyTorch build and GPU support them, and set a Pexels key.
+- **Narration:** Chatterbox is the default natural-sounding local voice engine. Edge TTS remains selectable, with the OS voice as a final fallback. On Windows, run `.\\backend\\setup_chatterbox_windows.ps1` in PowerShell to install Chatterbox into a separate Python environment; this keeps the app's PyTorch 2.2 GPU stack intact. The first Chatterbox voiceover downloads its model weights. You can set a custom Chatterbox Python path in Settings if needed.
 - **YouTube and batches:** select default privacy/category, daily upload cap, delay between titles, and the output folder. Use the file picker in Settings to add the Google Desktop OAuth JSON.
 
 Settings and API keys are stored per-user under `%APPDATA%\CreatorFlow\settings.json` on Windows (OAuth credentials and token are also stored in that folder). They are not committed to this repository. The settings file is local plaintext; protect your Windows account and do not share the file.
@@ -45,7 +46,7 @@ The Ollama badge shows **Running** when the selected model is loaded, **Idle · 
 - NVIDIA GPU and CUDA-enabled packaged build for local diffusion models (optional; initial model weights are large).
 - Google OAuth JSON for YouTube uploads (optional).
 
-Ollama itself is a separate local program; CreatorFlow can start its service and run an installed model, but it does not install Ollama silently. Without a Pexels key, images fall back to locally generated gradients. Local SDXL/SVD are off until enabled in Settings. Edge TTS uses Microsoft's service and needs internet access; if it fails, the app attempts the installed operating-system speech voice for narration.
+Ollama itself is a separate local program; CreatorFlow can start its service and run an installed model, but it does not install Ollama silently. Without a Pexels key, images fall back to locally generated gradients. Local SDXL/SVD are off until enabled in Settings. Chatterbox runs locally when its optional isolated runtime is installed; Edge TTS uses Microsoft's online service, and the app tries the installed operating-system voice if Edge TTS fails.
 
 ## Build from source / developer mode
 

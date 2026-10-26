@@ -43,6 +43,10 @@ def _apply_runtime_settings(settings):
     orchestrator.fetcher.api_key=orchestrator.images.api_key
     orchestrator.youtube.max_uploads=int(os.getenv("MAX_UPLOADS_PER_DAY", "5"))
     orchestrator.audio.voice=os.getenv("EDGE_TTS_VOICE", "en-US-AriaNeural")
+    orchestrator.audio.configure(
+        engine=os.getenv("TTS_ENGINE", "chatterbox"),
+        chatterbox_python=os.getenv("CHATTERBOX_PYTHON", ""),
+    )
     runtime=app.config.get("OLLAMA_RUNTIME")
     if runtime:
         if settings.get("USE_OLLAMA", True) and settings.get("OLLAMA_AUTO_START", True):
@@ -53,6 +57,9 @@ def _apply_runtime_settings(settings):
 def _gpu_status():
     status=orchestrator.local.gpu_status()
     if status.get("in_use"):
+        return status
+    if getattr(orchestrator.audio,"chatterbox_active",False) and getattr(orchestrator.audio,"last_device","") == "cuda":
+        status.update(available=True,state="active",in_use=True,device="NVIDIA GPU",operation="Chatterbox voice generation",message="Generating natural voiceover with Chatterbox on the NVIDIA GPU.")
         return status
     if getattr(orchestrator.assembler,"encoding_active",False) and getattr(orchestrator.assembler,"last_video_encoder",None)=="NVIDIA NVENC":
         status.update(available=True,state="active",in_use=True,device="NVIDIA GPU",operation="NVENC video encoding",message="Encoding video with NVIDIA NVENC.")
