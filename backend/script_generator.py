@@ -80,13 +80,16 @@ Writing brief:
         try:
             response = requests.post(
                 endpoint,
-                headers={"x-goog-api-key": self.gemini_api_key, "Content-Type": "application/json"},
+                headers={
+                    "x-goog-api-key": self.gemini_api_key,
+                    "Content-Type": "application/json",
+                    "Api-Revision": "2026-05-20",
+                },
                 json={
                     "model": self.gemini_model,
                     "input": user_input,
                     "system_instruction": system_instruction,
                     "generation_config": {
-                        "temperature": 0.8,
                         "thinking_level": "medium",
                         "max_output_tokens": min(8192, max(1024, target_words * 2)),
                     },
@@ -102,9 +105,15 @@ Writing brief:
             error_response = getattr(exc, "response", None)
             if error_response is not None:
                 try:
-                    detail = str(error_response.json().get("error", {}).get("message", ""))[:400]
+                    error_payload = error_response.json()
+                    error_data = error_payload.get("error", error_payload) if isinstance(error_payload, dict) else error_payload
+                    if isinstance(error_data, dict):
+                        detail = str(error_data.get("message") or error_data.get("status") or error_data)
+                    elif error_data:
+                        detail = str(error_data)
                 except (ValueError, AttributeError):
-                    pass
+                    detail = str(getattr(error_response, "text", ""))
+            detail = " ".join(detail.split())[:500]
             suffix = f" HTTP {status}" if status else ""
             raise RuntimeError(f"Gemini API request failed{suffix}{': ' + detail if detail else ''}") from exc
         if payload.get("status") not in {None, "completed"}:
