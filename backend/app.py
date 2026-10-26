@@ -98,11 +98,17 @@ def create_batch():
     titles=[str(t).strip()[:200] for t in titles if str(t).strip()]
     if not titles:return jsonify({"error":"Enter at least one video title."}),400
     if len(titles)>30:return jsonify({"error":"A batch can contain at most 30 titles."}),400
+    custom_scripts=body.get("custom_scripts")
+    if custom_scripts is not None:
+        if not isinstance(custom_scripts,list) or len(custom_scripts)!=len(titles):return jsonify({"error":"Provide exactly one custom script for each video title."}),400
+        custom_scripts=[str(script or "").strip() for script in custom_scripts]
+        if any(not script for script in custom_scripts):return jsonify({"error":"Each custom script must contain narration text."}),400
+        if any(len(script)>40000 for script in custom_scripts):return jsonify({"error":"Each custom script must be 40,000 characters or fewer."}),400
     try:duration=max(30,min(1800,int(body.get("duration",120))))
     except (TypeError,ValueError):return jsonify({"error":"duration must be a number of seconds"}),400
     niche=str(body.get("niche","General"))[:80];privacy=body.get("privacy",os.getenv("YOUTUBE_PRIVACY_STATUS","private"))
     if privacy not in {"private","unlisted","public"}:return jsonify({"error":"privacy must be private, unlisted, or public"}),400
-    batch_id=orchestrator.start_batch(titles,duration,niche,bool(body.get("auto_upload",False)),privacy)
+    batch_id=orchestrator.start_batch(titles,duration,niche,bool(body.get("auto_upload",False)),privacy,custom_scripts=custom_scripts)
     return jsonify({"batch_id":batch_id,"status":"queued"}),202
 @app.get("/api/batch/status/<batch_id>")
 def batch_status(batch_id):

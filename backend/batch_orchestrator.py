@@ -16,11 +16,11 @@ class BatchOrchestrator:
     def __init__(self):
         self.scripts=ScriptGenerator();self.audio=AudioGenerator();self.images=ImageGenerator();self.fetcher=VideoFetcher();self.local=LocalAIGenerator();self.assembler=VideoAssembler();self.thumbnails=ThumbnailGenerator(self.local);self.seo=YouTubeSEO();self.youtube=YouTubeUploader()
         self.batches={};self.lock=threading.RLock();self.pipeline_lock=threading.Lock();self.sequence=int(time.time())
-    def start_batch(self,titles:list,duration:int,niche:str,auto_upload:bool,privacy:str)->str:
+    def start_batch(self,titles:list,duration:int,niche:str,auto_upload:bool,privacy:str,custom_scripts=None)->str:
         batch_id=datetime.utcnow().strftime("%Y%m%dT%H%M%S")+"-"+uuid.uuid4().hex[:6]
         data={"batch_id":batch_id,"created_at":datetime.utcnow().isoformat()+"Z","status":"queued","total":len(titles),"completed":0,"failed":0,"progress":0,"videos":[{"title":t,"status":"waiting","progress":0,"current_stage":"Waiting","progress_message":"Queued","steps":{}} for t in titles],"error":None}
         with self.lock:self.batches[batch_id]=data
-        threading.Thread(target=self._process_batch,args=(batch_id,titles,duration,niche,auto_upload,privacy),daemon=True,name=f"batch-{batch_id}").start()
+        threading.Thread(target=self._process_batch,args=(batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts),daemon=True,name=f"batch-{batch_id}").start()
         return batch_id
     def get_status(self,batch_id):
         with self.lock:
@@ -38,15 +38,16 @@ class BatchOrchestrator:
             video=batch["videos"][index]
             video.update(progress=progress,current_stage=stage,progress_message=message)
             batch["progress"]=round(100*(batch["completed"]+progress/100)/max(1,batch["total"]))
-    def _process_batch(self,batch_id,titles,duration,niche,auto_upload,privacy):
+    def _process_batch(self,batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts=None):
         # Serialize independent batches too: never overlap GPU model loads or media assembly.
         with self.pipeline_lock:
-            self._run_batch_locked(batch_id,titles,duration,niche,auto_upload,privacy)
-    def _run_batch_locked(self,batch_id,titles,duration,niche,auto_upload,privacy):
+            self._run_batch_locked(batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts)
+    def _run_batch_locked(self,batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts=None):
         self._set(batch_id,status="running")
         for index,title in enumerate(titles):
             with self.lock:self.batches[batch_id]["videos"][index].update(status="processing",started_at=datetime.utcnow().isoformat()+"Z")
-            try:result=self._process_single_video(title,index,duration,niche,batch_id,auto_upload,privacy)
+            custom_script=custom_scripts[index] if custom_scripts and index<len(custom_scripts) else None
+            try:result=self._process_single_video(title,index,duration,niche,batch_id,auto_upload,privacy,custom_script)
             except Exception as exc:result={"title":title,"success":False,"steps":{},"error":str(exc)}
             with self.lock:
                 videos=self.batches[batch_id]["videos"];videos[index].update(result,status="done" if result.get("success") else "failed")
@@ -58,14 +59,18 @@ class BatchOrchestrator:
                 try:time.sleep(max(0,int(__import__('os').getenv("BATCH_DELAY_SECONDS","10"))))
                 except Exception:pass
         self._set(batch_id,status="completed",finished_at=datetime.utcnow().isoformat()+"Z")
-    def _process_single_video(self,title,index,duration,niche,batch_id,auto_upload,privacy):
+    def _process_single_video(self,title,index,duration,niche,batch_id,auto_upload,privacy,custom_script=None):
         steps={name:"pending" for name in ("script","images","clips","audio","assembly","subtitles","music","thumbnail","seo","upload")}
         base=f"{batch_id}_{index+1}";self.sequence+=1;serial=self.sequence
         result={"title":title,"success":False,"steps":steps,"video_path":None,"subtitle_path":None,"youtube_url":None,"seo":None,"error":None}
         report=lambda pct,stage,message:self._update_video_progress(batch_id,index,pct,stage,message)
-        report(1,"script","Writing the script and scene plan…")
+        report(1,"script","Preparing your custom script and matching scenes…" if custom_script is not None else "Writing the script and scene plan…")
         try:
-            script=self.scripts.generate_script(title,duration);result["script"]=script;steps["script"]="done"
+            if custom_script is not None:
+                script=self.scripts.generate_custom_script(title,custom_script,duration)
+            else:
+                script=self.scripts.generate_script(title,duration)
+            result["script"]=script;steps["script"]="done"
             report(8,"script","Script ready")
         except Exception as exc:steps["script"]="failed";result["error"]=f"Script generation failed: {exc}";return result
         if env_bool("USE_LOCAL_IMAGES",False) or env_bool("USE_LOCAL_VIDEO",False):
