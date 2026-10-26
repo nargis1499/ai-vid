@@ -113,10 +113,9 @@ class BatchOrchestrator:
         except Exception as exc:
             steps["script"]="failed";result["error"]=f"Script generation failed: {exc}"
             report(8,"script",result["error"],{"script":"failed"});return result
-        if env_bool("USE_LOCAL_IMAGES",False) or env_bool("USE_LOCAL_VIDEO",False):
+        if env_bool("USE_LOCAL_IMAGES",False):
             self._release_ollama_for_gpu()
         scenes=script.get("scenes",[])
-        scene_images=[None]*len(scenes)
         media=[None]*len(scenes)
         stock_video_count=0
         local_images=env_bool("USE_LOCAL_IMAGES",False) and self.local.available
@@ -150,7 +149,6 @@ class BatchOrchestrator:
                 if self.fetcher.api_key:
                     report(pct,"images",f"No relevant stock clip found; preparing a stock still or gradient for scene {i+1}…")
                 image_path=self.images.generate_scene_image(scene,serial*100+i)
-            scene_images[i]=image_path
             media[i]={"type":"image","path":image_path}
             report(8+int(20*(i+1)/max(1,len(scenes))),"images",f"Fallback visual ready for scene {i+1} of {len(scenes)}")
 
@@ -158,25 +156,16 @@ class BatchOrchestrator:
         fallback_count=sum(1 for item in media if item and item["type"]=="image")
         report(28,"images",f"Selected stock footage for {stock_video_count} scene(s); prepared still visuals for {fallback_count}",{"images":steps["images"]})
 
-        # Animate only fallback stills. A selected stock clip already provides motion
-        # and should not be replaced with an AI animation.
-        local_video=env_bool("USE_LOCAL_VIDEO",False) and self.local.available
-        for i,scene in enumerate(scenes):
+        for i in range(len(scenes)):
             pct=28+int(17*i/max(1,len(scenes)))
             if media[i] and media[i]["type"]=="video":
-                report(pct,"clips",f"Keeping the selected stock footage for scene {i+1} of {len(scenes)}…")
-            elif local_video and scene_images[i]:
-                report(pct,"clips",f"Animating fallback visual {i+1} of {len(scenes)} with Stable Video Diffusion…")
-                clip=self.local.generate_video_clip(scene_images[i],scene.get("visual_description",title),serial*100+i)
-                if clip:
-                    media[i]={"type":"video","path":clip}
-                else:
-                    report(pct,"clips",f"Local animation unavailable for scene {i+1}; keeping its still visual…")
+                report(pct,"clips",f"Using the selected stock footage for scene {i+1} of {len(scenes)}…")
             else:
-                report(pct,"clips",f"Using the still visual for scene {i+1} of {len(scenes)} with animated transitions…")
-            report(28+int(17*(i+1)/max(1,len(scenes))),"clips",f"Scene {i+1} visual motion ready")
+                report(pct,"clips",f"Using the still fallback for scene {i+1} of {len(scenes)} with standard transitions…")
+            report(28+int(17*(i+1)/max(1,len(scenes))),"clips",f"Scene {i+1} footage and transitions ready")
         steps["clips"]="done" if any(m and m["type"]=="video" for m in media) else "fallback"
-        clip_summary=f"Stock footage or local animation ready for {sum(1 for m in media if m and m['type']=='video')} scene(s)" if steps["clips"]=="done" else "Using still-image motion and transitions"
+        stock_count=sum(1 for item in media if item and item["type"]=="video")
+        clip_summary=f"Stock footage ready for {stock_count} scene(s)" if stock_count else "Using still fallbacks with standard transitions"
         report(45,"clips",clip_summary,{"clips":steps["clips"]})
         audio_paths=[]
         if self.audio.voice_engine == "chatterbox":
