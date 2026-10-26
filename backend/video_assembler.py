@@ -15,7 +15,7 @@ class VideoAssembler:
         self.encoding_active = False
         self._nvenc_unavailable_binary = None
 
-    def _encode_video(self, final, path, ffmpeg_binary, allow_nvenc, logger):
+    def _encode_video(self, final, path, ffmpeg_binary, allow_nvenc, logger, stage_callback=None):
         path = Path(path)
         ffmpeg_key = str(ffmpeg_binary)
         use_nvenc = allow_nvenc and self._nvenc_unavailable_binary != ffmpeg_key
@@ -33,6 +33,7 @@ class VideoAssembler:
         for label, codec, preset, ffmpeg_params, temp_path, temp_audio in attempts:
             self.last_video_encoder = label
             self.encoding_active = True
+            if stage_callback:stage_callback("encoding",f"Encoding MP4 with {label} at 30 fps…")
             try:
                 for stale in (temp_path, temp_audio):
                     try:
@@ -48,12 +49,14 @@ class VideoAssembler:
                 os.replace(temp_path, path)
                 self.last_video_encoder = label
                 print(f"[video] Encoded {path.name} using {label}")
+                if stage_callback:stage_callback("encoding",f"MP4 encoding complete using {label}.")
                 return
             except Exception as exc:
                 if codec == "h264_nvenc":
                     nvenc_error = exc
                     self._nvenc_unavailable_binary = ffmpeg_key
                     print(f"[video] NVENC unavailable; falling back to CPU libx264: {exc}")
+                    if stage_callback:stage_callback("encoding","NVENC unavailable; retrying the MP4 encode on the CPU…")
                 else:
                     if nvenc_error:
                         raise RuntimeError(
@@ -70,7 +73,8 @@ class VideoAssembler:
 
     def create(self, script: dict, media_items: list, audio_paths: list, video_id: str,
                progress_callback=None, video_title: str | None = None,
-               resolution: str = "720p", use_nvenc: bool = True) -> str:
+               resolution: str = "720p", use_nvenc: bool = True,
+               stage_callback=None) -> str:
         output_size = {"720p": (1280, 720), "1080p": (1920, 1080)}.get(str(resolution).lower())
         if output_size is None:
             raise ValueError("resolution must be 720p or 1080p")
@@ -194,6 +198,7 @@ class VideoAssembler:
             title = video_title or script.get("title") or "Video"
 
             # Captions use the exact revised narration and follow each scene's transition-aware start time.
+            if stage_callback:stage_callback("subtitles","Creating timed English caption cues and the downloadable SRT file…")
             subtitle_clips, subtitle_entries = self._make_subtitles(
                 scenes, speech_durations, scene_starts, final.duration, final.size
             )
@@ -202,8 +207,10 @@ class VideoAssembler:
             if subtitle_clips:
                 captioned = CompositeVideoClip([final] + subtitle_clips, size=final.size)
                 final = captioned.set_duration(final.duration)
+            if stage_callback:stage_callback("subtitles",f"Timed captions ready ({len(subtitle_entries)} cue(s)); SRT saved.")
 
             # A deterministic, original instrumental loop is selected by title keywords.
+            if stage_callback:stage_callback("music","Choosing and mixing a title-matched instrumental soundtrack…")
             try:
                 from background_music import BackgroundMusicGenerator
                 music_path, music_style = BackgroundMusicGenerator().generate(title)
@@ -219,6 +226,9 @@ class VideoAssembler:
                 self.last_music_error = str(exc)
                 final = final.set_audio(voice_track)
                 print(f"[music] Could not add background music; continuing with narration only: {exc}")
+            if stage_callback:
+                music_message=f"Mixed {self.last_music_style} soundtrack; finalizing audio and visual fades…" if self.last_music_style else "Continuing with narration only; finalizing video and audio fades…"
+                stage_callback("music",music_message)
 
             # Finish with a polished fade from black and fade to black, plus matching audio fades.
             fade_in = min(1.1, final.duration / 3.0)
@@ -230,7 +240,7 @@ class VideoAssembler:
                 final = final.set_audio(faded_audio)
 
             path = DIRS["videos"] / f"{video_id}.mp4"
-            self._encode_video(final, path, FFMPEG_BINARY, use_nvenc, moviepy_logger)
+            self._encode_video(final, path, FFMPEG_BINARY, use_nvenc, moviepy_logger, stage_callback)
             if progress_callback:
                 progress_callback(1.0)
             return str(path)

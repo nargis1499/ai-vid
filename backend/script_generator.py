@@ -12,8 +12,10 @@ class ScriptGenerator:
         self.enabled = env_bool("USE_OLLAMA", True)
         self.url = os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
         self.model = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+        self.last_source = "Built-in template"
 
     def generate_script(self, title: str, duration: int) -> dict:
+        self.last_source = "Built-in template"
         count = max(3, min(24, int(duration) // 10))
         if self.enabled:
             prompt = f'''Create a compelling YouTube narration plan for the title: {title!r}. Target total duration {duration} seconds. Return ONLY valid JSON, no markdown, matching: {{"title":"...","description":"...","scenes":[{{"scene_number":1,"duration":8,"narration":"2-3 spoken sentences","visual_description":"specific cinematic visual","search_keywords":"2-3 concrete search words","text_overlay":"short phrase"}}],"tags":["tag"]}}. Make exactly {count} scenes; scene durations should sum to about {duration} seconds. Use engaging accurate language.'''
@@ -28,6 +30,7 @@ class ScriptGenerator:
                 response.raise_for_status()
                 data = self._parse_json(response.json().get("response", ""))
                 if data.get("scenes"):
+                    self.last_source = f"Ollama · {self.model}"
                     return self._normalize(data, title, duration, count)
             except Exception as exc:
                 print(f"[script] Ollama unavailable; using template: {exc}")
@@ -70,7 +73,9 @@ RAW creator draft data: {source}'''
             )
             response.raise_for_status()
             data = self._parse_json(response.json().get("response", ""))
-            return self._normalize_custom_review(data, title, duration)
+            reviewed = self._normalize_custom_review(data, title, duration)
+            self.last_source = f"Ollama review · {self.model}"
+            return reviewed
         except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
             raise RuntimeError(
                 f"The local model {self.model} could not review this custom script ({type(exc).__name__}: {exc}). "
