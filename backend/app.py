@@ -36,9 +36,6 @@ def _apply_runtime_settings(settings):
     orchestrator.scripts.enabled=env_bool("USE_OLLAMA", True)
     orchestrator.scripts.url=os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
     orchestrator.scripts.model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
-    orchestrator.scripts.provider=os.getenv("SCRIPT_PROVIDER", "gemini").strip().lower()
-    orchestrator.scripts.gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip()
-    orchestrator.scripts.gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
     orchestrator.seo.enabled=orchestrator.scripts.enabled
     orchestrator.seo.url=orchestrator.scripts.url
     orchestrator.seo.model=orchestrator.scripts.model
@@ -228,16 +225,12 @@ def get_settings():
 @app.post("/api/settings")
 def update_settings():
     body=request.get_json(silent=True) or {}
-    allowed=set(public_settings())-{"PEXELS_API_KEY_CONFIGURED", "GEMINI_API_KEY_CONFIGURED", "YOUTUBE_CREDENTIALS_CONFIGURED"}
+    allowed=set(public_settings())-{"PEXELS_API_KEY_CONFIGURED", "YOUTUBE_CREDENTIALS_CONFIGURED"}
     updates={key:value for key,value in body.items() if key in allowed}
     if body.get("PEXELS_API_KEY"):
         updates["PEXELS_API_KEY"]=str(body["PEXELS_API_KEY"]).strip()
     elif body.get("CLEAR_PEXELS_API_KEY"):
         updates["PEXELS_API_KEY"]=""
-    if body.get("GEMINI_API_KEY"):
-        updates["GEMINI_API_KEY"]=str(body["GEMINI_API_KEY"]).strip()
-    elif body.get("CLEAR_GEMINI_API_KEY"):
-        updates["GEMINI_API_KEY"]=""
     try:
         settings=save_settings(updates)
         _apply_runtime_settings(settings)
