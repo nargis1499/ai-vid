@@ -1,4 +1,4 @@
-"""Pexels stock-video search with conservative relevance matching."""
+"""Pexels stock-video search that prefers matches but accepts weaker results."""
 import os
 import re
 from urllib.parse import unquote, urlparse
@@ -40,7 +40,7 @@ class VideoFetcher:
         return len(matched) / len(query_terms)
 
     def fetch_clip(self, query: str, index: int, min_dur: float = 5) -> str | None:
-        """Download the top-ranked *relevant* Pexels clip, or return None to trigger fallback visuals."""
+        """Download Pexels' best available search result, or return None when no usable clip exists."""
         if not self.api_key:
             return None
         try:
@@ -63,14 +63,12 @@ class VideoFetcher:
                 if not files:
                     continue
                 relevance = self._relevance(query, video)
-                # Pexels ranks results by query relevance; require at least a meaningful
-                # keyword overlap so an unrelated result does not displace the SDXL fallback.
-                if relevance < 0.25:
-                    continue
+                # Prefer stronger slug/keyword overlap, while keeping every usable
+                # Pexels-ranked result eligible so weaker matches can beat an SDXL fallback.
                 candidates.append((relevance, rank, video, files))
 
             if not candidates:
-                print(f"[video] No relevant Pexels clip for: {query}")
+                print(f"[video] No usable Pexels clip available for: {query}")
                 return None
 
             # Prefer the strongest keyword match; retain Pexels relevance order for ties.

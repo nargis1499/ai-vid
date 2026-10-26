@@ -121,13 +121,13 @@ class BatchOrchestrator:
         local_images=env_bool("USE_LOCAL_IMAGES",False) and self.local.available
 
         # Prefer a relevant real stock clip for each scene. Only generate a custom still
-        # when Pexels has no sufficiently relevant result (or no API key is configured).
+        # when Pexels has no usable result (or no API key is configured).
         for i,scene in enumerate(scenes):
             pct=8+int(20*i/max(1,len(scenes)))
             search_query=(scene.get("search_keywords") or scene.get("visual_description")
                           or scene.get("narration") or title)
             if self.fetcher.api_key:
-                report(pct,"images",f"Searching for the best matching stock footage for scene {i+1} of {len(scenes)}…")
+                report(pct,"images",f"Searching Pexels for scene {i+1} and choosing the closest available stock clip…")
                 stock_clip=self.fetcher.fetch_clip(search_query,serial*100+i,min_dur=5)
             else:
                 stock_clip=None
@@ -136,18 +136,18 @@ class BatchOrchestrator:
             if stock_clip:
                 media[i]={"type":"video","path":stock_clip}
                 stock_video_count+=1
-                report(8+int(20*(i+1)/max(1,len(scenes))),"images",f"Best-match stock footage selected for scene {i+1} of {len(scenes)}")
+                report(8+int(20*(i+1)/max(1,len(scenes))),"images",f"Selected the closest available stock clip for scene {i+1} of {len(scenes)}")
                 continue
 
             if local_images:
-                report(pct,"images",f"No relevant stock clip found; creating a local SDXL fallback for scene {i+1}…")
+                report(pct,"images",f"No usable stock clip found; creating a local SDXL fallback for scene {i+1}…")
                 image_path=self.local.generate_image(scene.get("visual_description",title),serial*100+i)
                 if not image_path:
                     report(pct,"images",f"Local SDXL unavailable for scene {i+1}; switching to a stock still or gradient…")
                     image_path=self.images.generate_scene_image(scene,serial*100+i)
             else:
                 if self.fetcher.api_key:
-                    report(pct,"images",f"No relevant stock clip found; preparing a stock still or gradient for scene {i+1}…")
+                    report(pct,"images",f"No usable stock clip found; preparing a stock still or gradient for scene {i+1}…")
                 image_path=self.images.generate_scene_image(scene,serial*100+i)
             media[i]={"type":"image","path":image_path}
             report(8+int(20*(i+1)/max(1,len(scenes))),"images",f"Fallback visual ready for scene {i+1} of {len(scenes)}")
