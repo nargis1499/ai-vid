@@ -46,7 +46,7 @@ function updateStepDetails(row,video){
 function renderCustomScriptEditors(){const wrap=$('#custom-script-editors');const titles=titlesEl.value.split('\n').map(x=>x.trim()).filter(Boolean);const previous=[...wrap.querySelectorAll('.custom-script-input')].map(input=>input.value);if(!titles.length){wrap.innerHTML='<small class="script-empty-hint">Add video titles above to create a script field for each one.</small>';return}wrap.innerHTML=titles.map((title,i)=>`<label class="custom-script-editor"><span>VIDEO ${String(i+1).padStart(2,'0')} · ${escapeHtml(title)}</span><textarea class="custom-script-input" maxlength="40000" placeholder="Paste the exact narration for this video…">${escapeHtml(previous[i]||'')}</textarea></label>`).join('')}
 titlesEl.addEventListener('input',()=>{const n=titlesEl.value.split('\n').map(x=>x.trim()).filter(Boolean).length;$('#title-count').textContent=`${n} title${n===1?'':'s'}`;if($('#use-custom-script').checked)renderCustomScriptEditors()});
 $('#use-custom-script').addEventListener('change',event=>{const panel=$('#custom-scripts-panel');panel.classList.toggle('hidden',!event.target.checked);if(event.target.checked)renderCustomScriptEditors()});
-$('#generate').addEventListener('click',startBatch);$('#stop-batch').addEventListener('click',stopBatch);$('#video-list').addEventListener('click',handleVideoAction);$('#refresh-batches').addEventListener('click',loadHistory);
+$('#generate').addEventListener('click',startBatch);$('#thumbnail-only').addEventListener('change',updateThumbnailOnlyMode);$('#stop-batch').addEventListener('click',stopBatch);$('#video-list').addEventListener('click',handleVideoAction);$('#refresh-batches').addEventListener('click',loadHistory);
 $('#help-button').addEventListener('click',()=>toast('See the setup notes in Settings for local services, keys and FFmpeg.'));
 const openSettings=()=>{loadSettingsForm();$('#settings-dialog').showModal()};$('#settings-button').addEventListener('click',openSettings);$('#open-settings-link').addEventListener('click',event=>{event.preventDefault();openSettings()});
 $('#close-settings').addEventListener('click',()=>$('#settings-dialog').close());
@@ -60,10 +60,12 @@ $('#start-ollama').addEventListener('click',startOllamaFromSettings);
 $('#pull-ollama').addEventListener('click',pullOllamaFromSettings);
 $('#youtube-credentials-file').addEventListener('change',uploadYoutubeCredentials);
 $('#connect-youtube').addEventListener('click',async()=>{const btn=$('#connect-youtube');btn.disabled=true;btn.textContent='Opening Google sign-in…';try{const r=await fetch('/api/youtube/auth',{method:'POST'});const d=await r.json();if(!r.ok)throw new Error(d.error||'Could not connect YouTube');toast('YouTube channel connected.');await loadYoutubeStatus()}catch(e){toast(e.message||'YouTube sign-in did not complete. Run the app locally and try again.')}finally{btn.disabled=false;btn.innerHTML='<i class="fa-brands fa-youtube"></i> Connect channel'}});
+function updateThumbnailOnlyMode(){const enabled=$('#thumbnail-only').checked;const autoUpload=$('#auto-upload');if(enabled)autoUpload.checked=false;autoUpload.disabled=enabled;$('#generate').querySelector('span:nth-child(2)').textContent=enabled?'Generate thumbnails':'Generate video batch'}
 async function startBatch(){
  const titles=titlesEl.value.split('\n').map(x=>x.trim()).filter(Boolean);
  if(!titles.length){toast('Add at least one video title to get started.');titlesEl.focus();return}
  const useCustom=$('#use-custom-script').checked;
+ const thumbnailOnly=$('#thumbnail-only').checked;
  let customScripts=[];
  if(useCustom){
   customScripts=[...$('#custom-script-editors').querySelectorAll('.custom-script-input')].map(input=>input.value.trim());
@@ -71,16 +73,16 @@ async function startBatch(){
   if(customScripts.some(script=>!script)){toast('Paste a script for each video, or switch off custom scripts to use the configured script provider.');return}
   if(customScripts.some(script=>script.length>40000)){toast('Each custom script must be 40,000 characters or fewer.');return}
  }
- const button=$('#generate');button.disabled=true;button.querySelector('span:nth-child(2)').textContent='Starting your batch…';
+ const button=$('#generate');button.disabled=true;button.querySelector('span:nth-child(2)').textContent=thumbnailOnly?'Starting thumbnail generation…':'Starting your batch…';
  try{
-  const payload={titles,duration:Number($('#duration').value),resolution:$('#resolution').value,voice_speed:$('#voice-speed').value,niche:$('#niche').value,privacy:$('#privacy').value,auto_upload:$('#auto-upload').checked};
+  const payload={titles,duration:Number($('#duration').value),resolution:$('#resolution').value,voice_speed:$('#voice-speed').value,niche:$('#niche').value,privacy:$('#privacy').value,auto_upload:thumbnailOnly?false:$('#auto-upload').checked,thumbnail_only:thumbnailOnly};
   if(useCustom)payload.custom_scripts=customScripts;
   const response=await fetch('/api/batch/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   const data=await response.json();if(!response.ok)throw new Error(data.error||'Unable to start batch');
-  activeBatch=data.batch_id;$('#progress-section').classList.remove('hidden');$('#total-count').textContent=titles.length;$('#done-count').textContent='0';$('#failed-count').textContent='0 failed';$('#progress-title').textContent='Preparing your videos';$('#progress-message').textContent=useCustom?'Preparing your scripts and scenes…':'Starting the creative pipeline…';
+  activeBatch=data.batch_id;$('#progress-section').classList.remove('hidden');$('#total-count').textContent=titles.length;$('#done-count').textContent='0';$('#failed-count').textContent='0 failed';$('#progress-title').textContent=thumbnailOnly?'Preparing your thumbnails':'Preparing your videos';$('#progress-message').textContent=thumbnailOnly?'Preparing scripts and visuals for thumbnail previews…':useCustom?'Preparing your scripts and scenes…':'Starting the creative pipeline…';
   $('#video-list').innerHTML=titles.map(makeVideoRow).join('');
   $('#progress-section').scrollIntoView({behavior:'smooth',block:'nearest'});await pollBatch();pollTimer=setInterval(pollBatch,3000)
- }catch(e){toast(e.message)}finally{button.disabled=false;button.querySelector('span:nth-child(2)').textContent='Generate video batch'}
+ }catch(e){toast(e.message)}finally{button.disabled=false;button.querySelector('span:nth-child(2)').textContent=$('#thumbnail-only').checked?'Generate thumbnails':'Generate video batch'}
 }
 async function stopBatch(){
  if(!activeBatch)return;
@@ -104,15 +106,15 @@ async function pollBatch(){
   $('#failed-count').textContent=`${data.failed||0} failed`;
   updateGpuStatus(data.gpu_status||{});
   const terminal=['completed','cancelled','failed'].includes(data.status);
-  $('#progress-title').textContent=data.status==='completed'?'Batch complete':data.status==='stopping'?'Stopping generation…':data.status==='cancelled'?'Generation stopped':data.status==='failed'?'Batch failed':'Creating your videos';
+  $('#progress-title').textContent=data.status==='completed'?(data.thumbnail_only?'Thumbnail batch complete':'Batch complete'):data.status==='stopping'?'Stopping generation…':data.status==='cancelled'?'Generation stopped':data.status==='failed'?'Batch failed':data.thumbnail_only?'Creating thumbnails…':'Creating your videos';
   const stopButton=$('#stop-batch');stopButton.classList.toggle('hidden',terminal);stopButton.disabled=data.status==='stopping';stopButton.innerHTML=data.status==='stopping'?'<i class="fa-solid fa-spinner fa-spin"></i> Stopping…':'<i class="fa-solid fa-stop"></i> Stop generation';
   const activeVideo=(data.videos||[]).find(video=>video.status==='processing');
-  if(data.status==='completed')$('#progress-message').textContent='All generation steps have finished.';
-  else if(data.status==='cancelled')$('#progress-message').textContent='Generation was stopped. Completed videos are still available below.';
+  if(data.status==='completed')$('#progress-message').textContent=data.thumbnail_only?'All thumbnails are ready. Video generation was skipped.':'All generation steps have finished.';
+  else if(data.status==='cancelled')$('#progress-message').textContent=data.thumbnail_only?'Thumbnail generation was stopped. Completed thumbnail files are still available below.':'Generation was stopped. Completed videos are still available below.';
   else if(data.status==='failed')$('#progress-message').textContent=data.error||'The batch stopped because of an unexpected error.';
   else if(data.status==='stopping')$('#progress-message').textContent='Stop requested; cancelling the current operation…';
   else if(activeVideo)$('#progress-message').textContent=`${activeVideo.title}: ${activeVideo.progress_message||activeVideo.current_stage} · ${activeVideo.progress||0}%`;
-  else $('#progress-message').textContent=`Waiting to process ${data.total} video${data.total===1?'':'s'}…`;
+  else $('#progress-message').textContent=data.thumbnail_only?`Waiting to create ${data.total} thumbnail${data.total===1?'':'s'}…`:`Waiting to process ${data.total} video${data.total===1?'':'s'}…`;
   $('#failed-count').textContent=`${data.failed||0} failed${data.cancelled?` · ${data.cancelled} stopped`:''}`;
   $('#batch-status').innerHTML=`<span class="status-dot ${data.status==='completed'?'green':''}"></span> ${escapeHtml(String(data.status).toUpperCase())}`;
   data.videos.forEach((video,index)=>{
@@ -120,8 +122,8 @@ async function pollBatch(){
    if(!row)return;
    const state=video.status||'waiting';
    const pct=state==='done'?100:Number(video.progress||0);
-   const message=state==='processing'?(video.progress_message||stepsLabel(video.steps)):state==='done'?(video.video_encoder?`Finished · ${video.video_encoder}`:'Finished processing')+(video.music_warning?' · music unavailable':'')+(video.voice_warning?` · ${video.voice_fallback_engine||'TTS'} fallback used`:''):state==='failed'?(video.error||video.upload_error||'Something went wrong'):state==='cancelled'?'Stopped by user.':'Waiting to start';
-   row.querySelector('.video-progress-message').textContent=state==='processing'?`${message} · video ${pct}%`:message;
+   const message=state==='processing'?(video.progress_message||stepsLabel(video.steps)):state==='done'?video.thumbnail_only?'Thumbnail ready · video rendering skipped':(video.video_encoder?`Finished · ${video.video_encoder}`:'Finished processing')+(video.music_warning?' · music unavailable':'')+(video.voice_warning?` · ${video.voice_fallback_engine||'TTS'} fallback used`:''):state==='failed'?(video.error||video.upload_error||'Something went wrong'):state==='cancelled'?'Stopped by user.':'Waiting to start';
+   row.querySelector('.video-progress-message').textContent=state==='processing'?`${message} · ${video.thumbnail_only?'thumbnail':'video'} ${pct}%`:message;
    const progressFill=row.querySelector('.video-progress-fill');
    progressFill.style.width=`${pct}%`;
    progressFill.setAttribute('aria-valuenow',String(pct));
@@ -153,7 +155,7 @@ async function pollBatch(){
    if(video.youtube_url&&!row.querySelector('.youtube-link')){const link=document.createElement('a');link.href=video.youtube_url;link.target='_blank';link.rel='noopener';link.className='youtube-link';link.innerHTML='<i class="fa-brands fa-youtube"></i> View';badge.append(link)}
   });
   const publishing=(data.videos||[]).some(video=>video.upload_status==='uploading');
-  if(terminal&&!publishing){clearInterval(pollTimer);pollTimer=null;loadHistory();if(lastTerminalToastBatch!==activeBatch){lastTerminalToastBatch=activeBatch;if(data.status==='cancelled')toast('Generation stopped. Completed videos remain available.');else if(data.status==='failed')toast(data.error||'The batch failed.');else toast(data.failed?`Batch finished with ${data.failed} failed video${data.failed===1?'':'s'}.`:'Your video batch is ready!')}}
+  if(terminal&&!publishing){clearInterval(pollTimer);pollTimer=null;loadHistory();if(lastTerminalToastBatch!==activeBatch){lastTerminalToastBatch=activeBatch;if(data.status==='cancelled')toast(data.thumbnail_only?'Thumbnail generation stopped. Completed thumbnails remain available.':'Generation stopped. Completed videos remain available.');else if(data.status==='failed')toast(data.error||'The batch failed.');else toast(data.failed?`Batch finished with ${data.failed} failed ${data.thumbnail_only?'thumbnail':'video'}${data.failed===1?'':'s'}.`:data.thumbnail_only?'Your thumbnails are ready!':'Your video batch is ready!')}}
  }catch(error){console.error(error)}
 }
 function stepsLabel(steps){if(!steps)return'Processing';const names={script:'Script',images:'Visuals',clips:'Motion clips',audio:'Narration',assembly:'Scene assembly',subtitles:'Captions and SRT',music:'Music',encoding:'MP4 encoding',seo:'YouTube metadata',thumbnail:'Thumbnail',upload:'Upload',finalize:'Finishing'};const done=Object.keys(steps).filter(k=>['done','fallback','skipped'].includes(steps[k])).map(k=>names[k]||k);return done.length?`Completed: ${done.slice(-2).join(', ')}`:'Processing'}

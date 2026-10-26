@@ -23,13 +23,13 @@ class BatchOrchestrator:
     def __init__(self):
         self.scripts=ScriptGenerator();self.audio=AudioGenerator();self.images=ImageGenerator();self.fetcher=VideoFetcher();self.local=LocalAIGenerator();self.assembler=VideoAssembler();self.thumbnails=ThumbnailGenerator();self.seo=YouTubeSEO();self.youtube=YouTubeUploader()
         self.batches={};self.lock=threading.RLock();self.pipeline_lock=threading.Lock();self.upload_lock=threading.Lock();self.cancel_events={};self.active_batch_id=None;self.sequence=int(time.time())
-    def start_batch(self,titles:list,duration:int,niche:str,auto_upload:bool,privacy:str,custom_scripts=None,resolution="720p",voice_speed="medium")->str:
+    def start_batch(self,titles:list,duration:int,niche:str,auto_upload:bool,privacy:str,custom_scripts=None,resolution="720p",voice_speed="medium",thumbnail_only=False)->str:
         batch_id=datetime.utcnow().strftime("%Y%m%dT%H%M%S")+"-"+uuid.uuid4().hex[:6]
-        data={"batch_id":batch_id,"created_at":datetime.utcnow().isoformat()+"Z","status":"queued","total":len(titles),"completed":0,"failed":0,"cancelled":0,"progress":0,"resolution":resolution,"voice_speed":voice_speed,"auto_upload":auto_upload,"privacy":privacy,"videos":[{"title":t,"status":"waiting","progress":0,"current_stage":"Waiting","progress_message":"Queued","upload_status":"not_requested","steps":{key:"pending" for key in VIDEO_STEP_KEYS},"step_messages":{}} for t in titles],"error":None}
+        data={"batch_id":batch_id,"created_at":datetime.utcnow().isoformat()+"Z","status":"queued","total":len(titles),"completed":0,"failed":0,"cancelled":0,"progress":0,"resolution":resolution,"voice_speed":voice_speed,"thumbnail_only":thumbnail_only,"auto_upload":auto_upload,"privacy":privacy,"videos":[{"title":t,"thumbnail_only":thumbnail_only,"status":"waiting","progress":0,"current_stage":"Waiting","progress_message":"Queued","upload_status":"not_requested","steps":{key:"pending" for key in VIDEO_STEP_KEYS},"step_messages":{}} for t in titles],"error":None}
         with self.lock:
             self.batches[batch_id]=data
             self.cancel_events[batch_id]=threading.Event()
-        threading.Thread(target=self._process_batch,args=(batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts,resolution,voice_speed),daemon=True,name=f"batch-{batch_id}").start()
+        threading.Thread(target=self._process_batch,args=(batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts,resolution,voice_speed,thumbnail_only),daemon=True,name=f"batch-{batch_id}").start()
         return batch_id
 
     def request_stop(self,batch_id):
@@ -76,17 +76,19 @@ class BatchOrchestrator:
             messages=video.setdefault("step_messages",{})
             messages[stage]=message
             for key,value in (step_updates or {}).items():
-                if key in steps:steps[key]=value
+                if key in steps:
+                    steps[key]=value
+                    if value=="skipped":messages[key]="Skipped because only thumbnails were requested." if batch.get("thumbnail_only") else message
             video.update(progress=progress,current_stage=stage,progress_message=message,steps=steps,step_messages=messages)
             batch["progress"]=round(100*(batch["completed"]+progress/100)/max(1,batch["total"]))
-    def _process_batch(self,batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts=None,resolution="720p",voice_speed="medium"):
+    def _process_batch(self,batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts=None,resolution="720p",voice_speed="medium",thumbnail_only=False):
         # Serialize independent batches too: never overlap GPU model loads or media assembly.
         try:
             with self.pipeline_lock:
                 with self.lock:
                     self.active_batch_id=batch_id
                 try:
-                    self._run_batch_locked(batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts,resolution,voice_speed)
+                    self._run_batch_locked(batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts,resolution,voice_speed,thumbnail_only)
                 finally:
                     with self.lock:
                         if self.active_batch_id==batch_id:
@@ -128,14 +130,14 @@ class BatchOrchestrator:
                     batch["failed"]+=1
                 batch.update(status="failed",error=error,finished_at=datetime.utcnow().isoformat()+"Z")
                 batch["progress"]=round(100*batch["completed"]/max(1,batch["total"]))
-    def _run_batch_locked(self,batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts=None,resolution="720p",voice_speed="medium"):
+    def _run_batch_locked(self,batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts=None,resolution="720p",voice_speed="medium",thumbnail_only=False):
         self._check_cancel(batch_id)
         self._set(batch_id,status="running")
         for index,title in enumerate(titles):
             self._check_cancel(batch_id)
             with self.lock:self.batches[batch_id]["videos"][index].update(status="processing",started_at=datetime.utcnow().isoformat()+"Z")
             custom_script=custom_scripts[index] if custom_scripts and index<len(custom_scripts) else None
-            try:result=self._process_single_video(title,index,duration,niche,batch_id,auto_upload,privacy,custom_script,resolution,voice_speed)
+            try:result=self._process_single_video(title,index,duration,niche,batch_id,auto_upload,privacy,custom_script,resolution,voice_speed,thumbnail_only)
             except BatchCancelled:
                 raise
             except Exception as exc:
@@ -153,7 +155,7 @@ class BatchOrchestrator:
                 if not result.get("success"):self.batches[batch_id]["failed"]+=1
                 self.batches[batch_id]["progress"]=round(100*self.batches[batch_id]["completed"]/len(titles))
             self._clear_gpu()
-            if index<len(titles)-1:
+            if index<len(titles)-1 and not thumbnail_only:
                 try:
                     delay=max(0,int(__import__('os').getenv("BATCH_DELAY_SECONDS","10")))
                     event=self.cancel_events.get(batch_id)
@@ -183,7 +185,7 @@ class BatchOrchestrator:
             candidate=stem[:100-len(suffix)].rstrip("-._")+suffix
             counter+=1
         return candidate
-    def _process_single_video(self,title,index,duration,niche,batch_id,auto_upload,privacy,custom_script=None,resolution="720p",voice_speed="medium"):
+    def _process_single_video(self,title,index,duration,niche,batch_id,auto_upload,privacy,custom_script=None,resolution="720p",voice_speed="medium",thumbnail_only=False):
         self._check_cancel(batch_id)
         steps={name:"pending" for name in VIDEO_STEP_KEYS}
         base=self._title_video_stem(title);self.sequence+=1;serial=self.sequence
@@ -217,15 +219,24 @@ class BatchOrchestrator:
         media=[None]*len(scenes)
         stock_video_count=0
         local_images=env_bool("USE_LOCAL_IMAGES",False) and self.local.available
+        thumbnail_scene_indices=set(range(len(scenes)))
+        if thumbnail_only and len(scenes)>5:
+            thumbnail_scene_indices={round(i*(len(scenes)-1)/4) for i in range(5)}
 
         # Prefer a relevant stock clip, then a locally downloaded stock still; only
         # generate a custom still when neither provider has usable stock media.
         for i,scene in enumerate(scenes):
             self._check_cancel(batch_id)
             pct=8+int(20*i/max(1,len(scenes)))
+            if thumbnail_only and i not in thumbnail_scene_indices:
+                report(pct,"images",f"Skipping scene {i+1}; the thumbnail layout uses at most five scene visuals…")
+                continue
             search_query=(scene.get("search_keywords") or scene.get("visual_description")
                           or scene.get("narration") or title)
-            if self.fetcher.api_key or self.fetcher.pixabay.api_key:
+            if thumbnail_only:
+                stock_clip=None
+                report(pct,"images",f"Finding a thumbnail-ready still for scene {i+1} of {len(scenes)}…")
+            elif self.fetcher.api_key or self.fetcher.pixabay.api_key:
                 report(pct,"images",f"Searching Pexels and Pixabay for scene {i+1}; choosing the closest available stock clip…")
                 stock_clip=self.fetcher.fetch_clip(search_query,serial*100+i,min_dur=5)
             else:
@@ -239,7 +250,7 @@ class BatchOrchestrator:
                 report(8+int(20*(i+1)/max(1,len(scenes))),"images",f"Selected the closest available {provider} stock clip for scene {i+1} of {len(scenes)}")
                 continue
 
-            report(pct,"images",f"No usable stock clip found; searching Pexels and Pixabay for a stock still for scene {i+1}…")
+            if not thumbnail_only:report(pct,"images",f"No usable stock clip found; searching Pexels and Pixabay for a stock still for scene {i+1}…")
             image_path=self.images.generate_scene_image(scene,serial*100+i)
             self._check_cancel(batch_id)
             if self.images.last_source=="Gradient" and local_images:
@@ -253,21 +264,59 @@ class BatchOrchestrator:
             provider=self.images.last_source or "fallback"
             report(8+int(20*(i+1)/max(1,len(scenes))),"images",f"Prepared {provider} still visual for scene {i+1} of {len(scenes)}")
 
-        steps["images"]="done" if scenes and all(media) else "failed"
+        visuals_ready=bool(thumbnail_scene_indices and all(media[i] for i in thumbnail_scene_indices)) if thumbnail_only else bool(scenes and all(media))
+        steps["images"]="done" if visuals_ready else "failed"
         fallback_count=sum(1 for item in media if item and item["type"]=="image")
-        report(28,"images",f"Selected stock footage for {stock_video_count} scene(s); prepared still visuals for {fallback_count}",{"images":steps["images"]})
+        if thumbnail_only:
+            report(28,"images",f"Prepared {fallback_count} still visual(s) for thumbnail testing",{"images":steps["images"]})
+        else:
+            report(28,"images",f"Selected stock footage for {stock_video_count} scene(s); prepared still visuals for {fallback_count}",{"images":steps["images"]})
 
-        for i in range(len(scenes)):
-            pct=28+int(17*i/max(1,len(scenes)))
-            if media[i] and media[i]["type"]=="video":
-                report(pct,"clips",f"Using the selected stock footage for scene {i+1} of {len(scenes)}…")
-            else:
-                report(pct,"clips",f"Using the still fallback for scene {i+1} of {len(scenes)} with standard transitions…")
-            report(28+int(17*(i+1)/max(1,len(scenes))),"clips",f"Scene {i+1} footage and transitions ready")
-        steps["clips"]="done" if any(m and m["type"]=="video" for m in media) else "fallback"
-        stock_count=sum(1 for item in media if item and item["type"]=="video")
-        clip_summary=f"Stock footage ready for {stock_count} scene(s)" if stock_count else "Using still fallbacks with standard transitions"
+        if thumbnail_only:
+            steps["clips"]="skipped"
+            clip_summary="Motion clips and transitions skipped for thumbnail-only mode"
+        else:
+            for i in range(len(scenes)):
+                pct=28+int(17*i/max(1,len(scenes)))
+                if media[i] and media[i]["type"]=="video":
+                    report(pct,"clips",f"Using the selected stock footage for scene {i+1} of {len(scenes)}…")
+                else:
+                    report(pct,"clips",f"Using the still fallback for scene {i+1} of {len(scenes)} with standard transitions…")
+                report(28+int(17*(i+1)/max(1,len(scenes))),"clips",f"Scene {i+1} footage and transitions ready")
+            steps["clips"]="done" if any(m and m["type"]=="video" for m in media) else "fallback"
+            stock_count=sum(1 for item in media if item and item["type"]=="video")
+            clip_summary=f"Stock footage ready for {stock_count} scene(s)" if stock_count else "Using still fallbacks with standard transitions"
         report(45,"clips",clip_summary,{"clips":steps["clips"]})
+        if thumbnail_only:
+            skipped_updates={key:"skipped" for key in ("audio","assembly","subtitles","music","encoding","upload")}
+            for key,state in skipped_updates.items():steps[key]=state
+            seo_message=f"Asking Ollama {getattr(self.seo,'model','local model')} to prepare thumbnail wording (built-in fallback available)…" if self.seo.enabled else "Preparing thumbnail wording with the built-in SEO template…"
+            report(50,"seo",seo_message+" Video rendering is disabled for this batch.",skipped_updates)
+            try:
+                seo=self.seo.generate_seo_package(title,script,niche)
+                self._check_cancel(batch_id)
+                result["seo"]=seo;steps["seo"]="done"
+                report(70,"seo","Thumbnail text and scene labels ready",{"seo":"done"})
+            except BatchCancelled:
+                raise
+            except Exception as exc:
+                steps["seo"]="failed";result["error"]=f"Thumbnail metadata generation failed: {exc}"
+                report(70,"seo",result["error"],{"seo":"failed"});return result
+            report(76,"thumbnail","Building the template-matched thumbnail from script visuals…")
+            thumbnail_background=next((item.get("path") for item in media if item and item.get("type")=="image"),None)
+            try:
+                thumb=self.thumbnails.generate(seo,title,serial,background_path=thumbnail_background,scenes=scenes,media_items=media,image_generator=self.images,video_fetcher=None)
+                self._check_cancel(batch_id)
+                result["thumbnail_path"]=thumb;result["thumbnail_only"]=True;result["success"]=True
+                steps["thumbnail"]="done";steps["finalize"]="done"
+                report(95,"thumbnail","Thumbnail artwork ready",{"thumbnail":"done"})
+                report(100,"finalize","Thumbnail ready — voiceover and video rendering were skipped.",{"finalize":"done"})
+            except BatchCancelled:
+                raise
+            except Exception as exc:
+                steps["thumbnail"]="failed";result["error"]=f"Thumbnail generation failed: {exc}"
+                report(95,"thumbnail",result["error"],{"thumbnail":"failed"});return result
+            return result
         audio_paths=[]
         if self.audio.voice_engine == "chatterbox":
             # Ollama may otherwise occupy most of an 8 GB GPU while Chatterbox loads.

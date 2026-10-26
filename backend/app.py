@@ -170,7 +170,9 @@ def create_batch():
     if voice_speed not in {"slower","slow","medium","faster"}:return jsonify({"error":"voice_speed must be slower, slow, medium, or faster"}),400
     niche=str(body.get("niche","General"))[:80];privacy=body.get("privacy",os.getenv("YOUTUBE_PRIVACY_STATUS","private"))
     if privacy not in {"private","unlisted","public"}:return jsonify({"error":"privacy must be private, unlisted, or public"}),400
-    batch_id=orchestrator.start_batch(titles,duration,niche,bool(body.get("auto_upload",False)),privacy,custom_scripts=custom_scripts,resolution=resolution,voice_speed=voice_speed)
+    thumbnail_only=bool(body.get("thumbnail_only",False))
+    auto_upload=bool(body.get("auto_upload",False)) and not thumbnail_only
+    batch_id=orchestrator.start_batch(titles,duration,niche,auto_upload,privacy,custom_scripts=custom_scripts,resolution=resolution,voice_speed=voice_speed,thumbnail_only=thumbnail_only)
     return jsonify({"batch_id":batch_id,"status":"queued"}),202
 @app.get("/api/batch/status/<batch_id>")
 def batch_status(batch_id):
