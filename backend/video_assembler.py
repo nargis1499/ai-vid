@@ -15,7 +15,12 @@ class VideoAssembler:
             from moviepy.editor import (AudioFileClip, ImageClip, VideoFileClip, concatenate_videoclips)
             from moviepy.config import FFMPEG_BINARY
         except Exception as exc:
-            raise RuntimeError(f"MoviePy could not be loaded ({type(exc).__name__}: {exc}). The desktop build may be missing MoviePy; rebuild it with the latest packaging script or reinstall moviepy==1.0.3.") from exc
+            details=str(exc)
+            if "cannot load module more than once per process" in details.lower():
+                hint="NumPy was initialized more than once. This commonly happens when a CUDA build upgrades NumPy; rebuild with the latest build-desktop-windows-cuda.bat, which pins NumPy 1.26.4."
+            else:
+                hint="The desktop build may be missing MoviePy; rebuild it with the latest packaging script or reinstall moviepy==1.0.3."
+            raise RuntimeError(f"MoviePy could not be loaded ({type(exc).__name__}: {details}). {hint}") from exc
         try:
             import subprocess
             check=subprocess.run([FFMPEG_BINARY, "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=10, check=False)
