@@ -36,6 +36,8 @@ try {
         --collect-all numpy `
         --collect-all imageio `
         --collect-all imageio_ffmpeg `
+        --collect-all pyttsx3 `
+        --collect-all comtypes `
         --collect-all proglog `
         --collect-all decorator `
         --copy-metadata moviepy `
@@ -44,6 +46,7 @@ try {
         --collect-all pythonnet `
         --hidden-import webview.platforms.edgechromium `
         --hidden-import webview.platforms.winforms `
+        --hidden-import pyttsx3.drivers.sapi5 `
         desktop.py
     if ($LASTEXITCODE -ne 0) { throw 'Packaging failed. Review the PyInstaller output above.' }
 } finally {

@@ -32,10 +32,14 @@ class VideoAssembler:
         clips=[];audios=[]
         try:
             for i,item in enumerate(media_items):
-                audio=None
-                if i<len(audio_paths) and audio_paths[i] and os.path.getsize(audio_paths[i])>0:
-                    try:audio=AudioFileClip(audio_paths[i]);audios.append(audio)
-                    except Exception:audio=None
+                if i>=len(audio_paths) or not audio_paths[i]:
+                    raise RuntimeError(f"Narration audio is missing for scene {i+1}; refusing to create a silent video.")
+                if not os.path.isfile(audio_paths[i]) or os.path.getsize(audio_paths[i])==0:
+                    raise RuntimeError(f"Narration audio for scene {i+1} is missing or empty: {audio_paths[i]}")
+                try:
+                    audio=AudioFileClip(audio_paths[i]);audios.append(audio)
+                except Exception as exc:
+                    raise RuntimeError(f"Could not decode narration audio for scene {i+1}: {exc}") from exc
                 duration=(audio.duration if audio else float(script.get("scenes",[{}])[i].get("duration",8)))+.5
                 duration=max(2.0,duration)
                 if item.get("type")=="video":
