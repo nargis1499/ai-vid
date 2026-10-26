@@ -3,7 +3,7 @@ import os
 from common import DIRS
 
 class VideoAssembler:
-    def create(self,script:dict,media_items:list,audio_paths:list,video_id:str)->str:
+    def create(self,script:dict,media_items:list,audio_paths:list,video_id:str,progress_callback=None)->str:
         try:
             from PIL import Image
             # MoviePy 1.x still references Image.ANTIALIAS, removed in Pillow 10.
@@ -29,6 +29,19 @@ class VideoAssembler:
                 raise RuntimeError(detail or f"FFmpeg exited with code {check.returncode}")
         except Exception as exc:
             raise RuntimeError(f"FFmpeg could not be started from {FFMPEG_BINARY!r} ({type(exc).__name__}: {exc}). Set a valid ffmpeg.exe in CreatorFlow Settings or rebuild with imageio-ffmpeg bundled.") from exc
+        moviepy_logger=None
+        if progress_callback:
+            try:
+                from proglog import ProgressBarLogger
+                class AssemblyProgressLogger(ProgressBarLogger):
+                    def bars_callback(self,bar,attr,value,old_value=None):
+                        if bar=="t" and attr=="index":
+                            total=self.bars.get(bar,{}).get("total",0)
+                            if total:
+                                progress_callback(max(0,min(1,float(value)/total)))
+                moviepy_logger=AssemblyProgressLogger()
+            except Exception:
+                moviepy_logger=None
         clips=[];audios=[]
         try:
             for i,item in enumerate(media_items):
@@ -63,7 +76,8 @@ class VideoAssembler:
             if not clips:raise RuntimeError("No usable scene media was generated")
             final=concatenate_videoclips(clips,method="compose",padding=-.3)
             path=DIRS["videos"]/f"{video_id}.mp4"
-            final.write_videofile(str(path),fps=30,codec="libx264",audio_codec="aac",preset="medium",threads=4,logger=None)
+            final.write_videofile(str(path),fps=30,codec="libx264",audio_codec="aac",preset="medium",threads=4,logger=moviepy_logger)
+            if progress_callback:progress_callback(1.0)
             final.close()
             return str(path)
         finally:

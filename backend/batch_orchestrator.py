@@ -1,5 +1,5 @@
 """Background, sequential batch controller for the complete video pipeline."""
-import gc, threading, time, uuid, os, requests
+import gc, threading, time, uuid, os, requests, copy
 from datetime import datetime
 from common import DIRS, env_bool
 from script_generator import ScriptGenerator
@@ -18,18 +18,26 @@ class BatchOrchestrator:
         self.batches={};self.lock=threading.RLock();self.pipeline_lock=threading.Lock();self.sequence=int(time.time())
     def start_batch(self,titles:list,duration:int,niche:str,auto_upload:bool,privacy:str)->str:
         batch_id=datetime.utcnow().strftime("%Y%m%dT%H%M%S")+"-"+uuid.uuid4().hex[:6]
-        data={"batch_id":batch_id,"created_at":datetime.utcnow().isoformat()+"Z","status":"queued","total":len(titles),"completed":0,"failed":0,"progress":0,"videos":[{"title":t,"status":"waiting","steps":{}} for t in titles],"error":None}
+        data={"batch_id":batch_id,"created_at":datetime.utcnow().isoformat()+"Z","status":"queued","total":len(titles),"completed":0,"failed":0,"progress":0,"videos":[{"title":t,"status":"waiting","progress":0,"current_stage":"Waiting","progress_message":"Queued","steps":{}} for t in titles],"error":None}
         with self.lock:self.batches[batch_id]=data
         threading.Thread(target=self._process_batch,args=(batch_id,titles,duration,niche,auto_upload,privacy),daemon=True,name=f"batch-{batch_id}").start()
         return batch_id
     def get_status(self,batch_id):
         with self.lock:
             item=self.batches.get(batch_id)
-            return dict(item) if item else None
+            return copy.deepcopy(item) if item else None
     def list_batches(self):
         with self.lock:return [dict(v) for v in sorted(self.batches.values(),key=lambda x:x["created_at"],reverse=True)]
     def _set(self,batch_id,**kwargs):
         with self.lock:self.batches[batch_id].update(kwargs)
+    def _update_video_progress(self,batch_id,index,progress,stage,message):
+        progress=max(0,min(100,int(progress)))
+        with self.lock:
+            batch=self.batches.get(batch_id)
+            if not batch:return
+            video=batch["videos"][index]
+            video.update(progress=progress,current_stage=stage,progress_message=message)
+            batch["progress"]=round(100*(batch["completed"]+progress/100)/max(1,batch["total"]))
     def _process_batch(self,batch_id,titles,duration,niche,auto_upload,privacy):
         # Serialize independent batches too: never overlap GPU model loads or media assembly.
         with self.pipeline_lock:
@@ -54,48 +62,66 @@ class BatchOrchestrator:
         steps={name:"pending" for name in ("script","images","clips","audio","assembly","thumbnail","seo","upload")}
         base=f"{batch_id}_{index+1}";self.sequence+=1;serial=self.sequence
         result={"title":title,"success":False,"steps":steps,"video_path":None,"youtube_url":None,"seo":None,"error":None}
+        report=lambda pct,stage,message:self._update_video_progress(batch_id,index,pct,stage,message)
+        report(1,"script","Writing the script and scene plan…")
         try:
             script=self.scripts.generate_script(title,duration);result["script"]=script;steps["script"]="done"
+            report(8,"script","Script ready")
         except Exception as exc:steps["script"]="failed";result["error"]=f"Script generation failed: {exc}";return result
         if env_bool("USE_LOCAL_IMAGES",False) or env_bool("USE_LOCAL_VIDEO",False):
             self._release_ollama_for_gpu()
         media=[];scene_images=[]
-        for i,scene in enumerate(script.get("scenes",[])):
+        scenes=script.get("scenes",[])
+        for i,scene in enumerate(scenes):
+            report(8+int(20*i/max(1,len(scenes))),"images",f"Creating visual {i+1} of {len(scenes)}…")
             path=self.local.generate_image(scene.get("visual_description",title),serial*100+i)
             if not path:path=self.images.generate_scene_image(scene,serial*100+i)
             scene_images.append(path);media.append({"type":"image","path":path})
+            report(8+int(20*(i+1)/max(1,len(scenes))),"images",f"Visual {i+1} of {len(scenes)} ready")
         steps["images"]="done" if scene_images else "failed"
         # Try image-to-video in sequence; failed scenes retain their still image.
-        for i,scene in enumerate(script.get("scenes",[])):
+        for i,scene in enumerate(scenes):
+            report(28+int(17*i/max(1,len(scenes))),"clips",f"Animating or finding clip {i+1} of {len(scenes)}…")
             clip=self.local.generate_video_clip(scene_images[i],scene.get("visual_description",title),serial*100+i)
             if not clip:clip=self.fetcher.fetch_clip(scene.get("search_keywords",title),serial*100+i,min_dur=5)
             if clip:media[i]={"type":"video","path":clip}
+            report(28+int(17*(i+1)/max(1,len(scenes))),"clips",f"Clip {i+1} of {len(scenes)} ready")
         steps["clips"]="done" if any(m["type"]=="video" for m in media) else "fallback"
         audio_paths=[]
-        for i,scene in enumerate(script.get("scenes",[])):
+        for i,scene in enumerate(scenes):
+            report(45+int(15*i/max(1,len(scenes))),"audio",f"Recording narration {i+1} of {len(scenes)}…")
             try:
                 audio_path=self.audio.generate(scene.get("narration",title),serial*100+i)
                 if not os.path.isfile(audio_path) or os.path.getsize(audio_path)==0:
                     raise RuntimeError("Narration output is missing or empty.")
                 audio_paths.append(audio_path)
+                report(45+int(15*(i+1)/max(1,len(scenes))),"audio",f"Voiceover {i+1} of {len(scenes)} ready")
             except Exception as exc:
                 steps["audio"]="failed"
                 result["error"]=f"Voiceover generation failed in scene {i+1}: {exc}"
                 return result
         steps["audio"]="done" if audio_paths else "failed"
+        report(60,"assembly","Assembling video and narration…")
         try:
-            video_path=self.assembler.create(script,media,audio_paths,base);result["video_path"]=video_path;steps["assembly"]="done"
+            def assembly_progress(fraction):
+                report(60+int(22*max(0,min(1,fraction))),"assembly",f"Encoding video… {int(100*max(0,min(1,fraction)))}%")
+            video_path=self.assembler.create(script,media,audio_paths,base,progress_callback=assembly_progress);result["video_path"]=video_path;steps["assembly"]="done"
+            report(82,"assembly","Video and audio assembled")
         except Exception as exc:steps["assembly"]="failed";result["error"]=f"Video assembly failed: {exc}";return result
         try:
+            report(83,"seo","Preparing YouTube title, description and tags…")
             seo=self.seo.generate_seo_package(title,script,niche);result["seo"]=seo;steps["seo"]="done"
+            report(88,"thumbnail","Designing the thumbnail…")
             thumb=self.thumbnails.generate(seo,title,serial);result["thumbnail_path"]=thumb;steps["thumbnail"]="done"
         except Exception as exc:steps["thumbnail"]="failed";result["error"]=str(exc);return result
         result["success"]=True
         if auto_upload:
+            report(94,"upload","Uploading the finished video to YouTube…")
             upload=self.youtube.upload_video(video_path,seo,thumb,privacy)
             if upload.get("success"):result["youtube_url"]=upload.get("url");result["youtube_video_id"]=upload.get("video_id");steps["upload"]="done"
             else:steps["upload"]="failed";result["upload_error"]=upload.get("error");result["success"]=False
         else:steps["upload"]="skipped"
+        report(100,"complete","Video complete" if result["success"] else "Upload failed")
         return result
     @staticmethod
     def _release_ollama_for_gpu():
