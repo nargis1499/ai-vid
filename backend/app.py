@@ -107,9 +107,11 @@ def create_batch():
         if any(len(script)>40000 for script in custom_scripts):return jsonify({"error":"Each custom script must be 40,000 characters or fewer."}),400
     try:duration=max(30,min(1800,int(body.get("duration",120))))
     except (TypeError,ValueError):return jsonify({"error":"duration must be a number of seconds"}),400
+    resolution=str(body.get("resolution","720p")).lower()
+    if resolution not in {"720p","1080p"}:return jsonify({"error":"resolution must be 720p or 1080p"}),400
     niche=str(body.get("niche","General"))[:80];privacy=body.get("privacy",os.getenv("YOUTUBE_PRIVACY_STATUS","private"))
     if privacy not in {"private","unlisted","public"}:return jsonify({"error":"privacy must be private, unlisted, or public"}),400
-    batch_id=orchestrator.start_batch(titles,duration,niche,bool(body.get("auto_upload",False)),privacy,custom_scripts=custom_scripts)
+    batch_id=orchestrator.start_batch(titles,duration,niche,bool(body.get("auto_upload",False)),privacy,custom_scripts=custom_scripts,resolution=resolution)
     return jsonify({"batch_id":batch_id,"status":"queued"}),202
 @app.get("/api/batch/status/<batch_id>")
 def batch_status(batch_id):
