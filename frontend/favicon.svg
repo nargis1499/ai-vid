@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="canvas" x1="8" y1="5" x2="57" y2="61" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7546E8"/>
+      <stop offset=".52" stop-color="#D83D82"/>
+      <stop offset="1" stop-color="#FA4054"/>
+    </linearGradient>
+    <linearGradient id="play" x1="24" y1="22" x2="42" y2="43" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FF7187"/>
+      <stop offset="1" stop-color="#E93659"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="13" y1="8" x2="50" y2="55" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF" stop-opacity=".24"/>
+      <stop offset="1" stop-color="#FFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow" x="9" y="15" width="49" height="42" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="2"/>
+      <feOffset dy="2"/>
+      <feComponentTransfer><feFuncA type="linear" slope=".22"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="64" height="64" rx="18" fill="#171321"/>
+  <rect x="3" y="3" width="58" height="58" rx="16" fill="url(#canvas)"/>
+  <path d="M19 4h25L4 44V20A16 16 0 0 1 19 4Z" fill="url(#shine)"/>
+  <g filter="url(#shadow)">
+    <rect x="13" y="18" width="38" height="29" rx="9" fill="#FFF"/>
+    <path d="M27 24.2c0-.92 1.02-1.49 1.81-1.01l13.05 7.8a1.18 1.18 0 0 1 0 2.02l-13.05 7.8c-.79.48-1.81-.09-1.81-1.01V24.2Z" fill="url(#play)"/>
+  </g>
+  <path d="M49 8.5 51 14l5.5 2-5.5 2-2 5.5-2-5.5-5.5-2 5.5-2 2-5.5Z" fill="#FFE58B" stroke="#FFF4C6" stroke-width=".7" stroke-linejoin="round"/>
+  <circle cx="13" cy="51" r="1.5" fill="#FFF" fill-opacity=".8"/>
+  <circle cx="18" cy="55" r=".8" fill="#FFE58B"/>
+</svg>
