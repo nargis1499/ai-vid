@@ -85,7 +85,9 @@ def _apply_runtime_settings(settings):
     orchestrator.seo.url=orchestrator.scripts.url
     orchestrator.seo.model=orchestrator.scripts.model
     orchestrator.images.api_key=os.getenv("PEXELS_API_KEY", "").strip()
+    orchestrator.images.pixabay.set_api_key(os.getenv("PIXABAY_API_KEY", "").strip())
     orchestrator.fetcher.api_key=orchestrator.images.api_key
+    orchestrator.fetcher.pixabay.set_api_key(os.getenv("PIXABAY_API_KEY", "").strip())
     orchestrator.youtube.max_uploads=int(os.getenv("MAX_UPLOADS_PER_DAY", "5"))
     orchestrator.audio.voice=os.getenv("EDGE_TTS_VOICE", "en-US-AriaNeural")
     orchestrator.audio.configure(
@@ -277,12 +279,16 @@ def get_settings():
 @app.post("/api/settings")
 def update_settings():
     body=request.get_json(silent=True) or {}
-    allowed=set(public_settings())-{"PEXELS_API_KEY_CONFIGURED", "OPENROUTER_API_KEY_CONFIGURED", "YOUTUBE_CREDENTIALS_CONFIGURED"}
+    allowed=set(public_settings())-{"PEXELS_API_KEY_CONFIGURED", "PIXABAY_API_KEY_CONFIGURED", "OPENROUTER_API_KEY_CONFIGURED", "YOUTUBE_CREDENTIALS_CONFIGURED"}
     updates={key:value for key,value in body.items() if key in allowed}
     if body.get("PEXELS_API_KEY"):
         updates["PEXELS_API_KEY"]=str(body["PEXELS_API_KEY"]).strip()
     elif body.get("CLEAR_PEXELS_API_KEY"):
         updates["PEXELS_API_KEY"]=""
+    if body.get("PIXABAY_API_KEY"):
+        updates["PIXABAY_API_KEY"]=str(body["PIXABAY_API_KEY"]).strip()
+    elif body.get("CLEAR_PIXABAY_API_KEY"):
+        updates["PIXABAY_API_KEY"]=""
     if body.get("OPENROUTER_API_KEY"):
         updates["OPENROUTER_API_KEY"]=str(body["OPENROUTER_API_KEY"]).strip()
     elif body.get("CLEAR_OPENROUTER_API_KEY"):

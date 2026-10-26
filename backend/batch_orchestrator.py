@@ -120,37 +120,37 @@ class BatchOrchestrator:
         stock_video_count=0
         local_images=env_bool("USE_LOCAL_IMAGES",False) and self.local.available
 
-        # Prefer a relevant real stock clip for each scene. Only generate a custom still
-        # when Pexels has no usable result (or no API key is configured).
+        # Prefer a relevant stock clip, then a locally downloaded stock still; only
+        # generate a custom still when neither provider has usable stock media.
         for i,scene in enumerate(scenes):
             pct=8+int(20*i/max(1,len(scenes)))
             search_query=(scene.get("search_keywords") or scene.get("visual_description")
                           or scene.get("narration") or title)
-            if self.fetcher.api_key:
-                report(pct,"images",f"Searching Pexels for scene {i+1} and choosing the closest available stock clip…")
+            if self.fetcher.api_key or self.fetcher.pixabay.api_key:
+                report(pct,"images",f"Searching Pexels and Pixabay for scene {i+1}; choosing the closest available stock clip…")
                 stock_clip=self.fetcher.fetch_clip(search_query,serial*100+i,min_dur=5)
             else:
                 stock_clip=None
-                report(pct,"images",f"No Pexels key configured; preparing a fallback visual for scene {i+1} of {len(scenes)}…")
+                report(pct,"images",f"No stock API key configured; preparing a fallback visual for scene {i+1} of {len(scenes)}…")
 
             if stock_clip:
                 media[i]={"type":"video","path":stock_clip}
                 stock_video_count+=1
-                report(8+int(20*(i+1)/max(1,len(scenes))),"images",f"Selected the closest available stock clip for scene {i+1} of {len(scenes)}")
+                provider=self.fetcher.last_source or "stock"
+                report(8+int(20*(i+1)/max(1,len(scenes))),"images",f"Selected the closest available {provider} stock clip for scene {i+1} of {len(scenes)}")
                 continue
 
-            if local_images:
-                report(pct,"images",f"No usable stock clip found; creating a local SDXL fallback for scene {i+1}…")
-                image_path=self.local.generate_image(scene.get("visual_description",title),serial*100+i)
-                if not image_path:
-                    report(pct,"images",f"Local SDXL unavailable for scene {i+1}; switching to a stock still or gradient…")
-                    image_path=self.images.generate_scene_image(scene,serial*100+i)
-            else:
-                if self.fetcher.api_key:
-                    report(pct,"images",f"No usable stock clip found; preparing a stock still or gradient for scene {i+1}…")
-                image_path=self.images.generate_scene_image(scene,serial*100+i)
+            report(pct,"images",f"No usable stock clip found; searching Pexels and Pixabay for a stock still for scene {i+1}…")
+            image_path=self.images.generate_scene_image(scene,serial*100+i)
+            if self.images.last_source=="Gradient" and local_images:
+                report(pct,"images",f"No usable stock image found; creating a local SDXL fallback for scene {i+1}…")
+                generated=self.local.generate_image(scene.get("visual_description",title),serial*100+i)
+                if generated:
+                    image_path=generated
+                    self.images.last_source="SDXL"
             media[i]={"type":"image","path":image_path}
-            report(8+int(20*(i+1)/max(1,len(scenes))),"images",f"Fallback visual ready for scene {i+1} of {len(scenes)}")
+            provider=self.images.last_source or "fallback"
+            report(8+int(20*(i+1)/max(1,len(scenes))),"images",f"Prepared {provider} still visual for scene {i+1} of {len(scenes)}")
 
         steps["images"]="done" if scenes and all(media) else "failed"
         fallback_count=sum(1 for item in media if item and item["type"]=="image")

@@ -4,6 +4,7 @@ from pathlib import Path
 import requests
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont
 from common import DIRS
+from pixabay_client import PixabayClient
 
 W,H=1280,720
 
@@ -21,9 +22,13 @@ def _cover(image):
     return image.crop((x,y,x+W,y+H))
 
 class ImageGenerator:
-    def __init__(self): self.api_key=__import__('os').getenv("PEXELS_API_KEY","").strip()
+    def __init__(self):
+        self.api_key=__import__('os').getenv("PEXELS_API_KEY","").strip()
+        self.pixabay=PixabayClient(__import__('os').getenv("PIXABAY_API_KEY", ""))
+        self.last_source=None
     def generate_scene_image(self, scene:dict, index:int)->str:
         path=DIRS["images"]/f"scene_{index}.png"
+        self.last_source=None
         try:
             if not self.api_key: raise RuntimeError("PEXELS_API_KEY not configured")
             r=requests.get("https://api.pexels.com/v1/search",headers={"Authorization":self.api_key},params={"query":scene.get("search_keywords",scene.get("visual_description","nature")),"orientation":"landscape","per_page":10},timeout=20);r.raise_for_status()
@@ -33,10 +38,32 @@ class ImageGenerator:
             raw=requests.get(url,timeout=30);raw.raise_for_status()
             image=_cover(Image.open(io.BytesIO(raw.content))); image=ImageEnhance.Contrast(image).enhance(1.05)
             image=self._overlay(image,scene.get("text_overlay","")); image.save(path)
+            self.last_source="Pexels"
         except Exception as exc:
-            print(f"[images] Stock image unavailable; gradient fallback: {exc}")
-            self._gradient(scene.get("text_overlay") or scene.get("search_keywords") or "Explore",path)
+            try:
+                self._save_pixabay_image(scene, path)
+                self.last_source="Pixabay"
+            except Exception as pixabay_exc:
+                print(f"[images] Pexels and Pixabay stock images unavailable; gradient fallback: {exc}; {pixabay_exc}")
+                self.last_source="Gradient"
+                self._gradient(scene.get("text_overlay") or scene.get("search_keywords") or "Explore",path)
         return str(path)
+
+    def _save_pixabay_image(self, scene, path):
+        query=scene.get("search_keywords",scene.get("visual_description","nature"))
+        hits=self.pixabay.search_images(query,per_page=20)
+        if not hits:
+            raise RuntimeError("No Pixabay image results")
+        photo=hits[0]
+        url=photo.get("largeImageURL") or photo.get("webformatURL")
+        if not url:
+            raise RuntimeError("Pixabay result has no downloadable image")
+        response=requests.get(url,timeout=30)
+        response.raise_for_status()
+        image=_cover(Image.open(io.BytesIO(response.content)))
+        image=ImageEnhance.Contrast(image).enhance(1.05)
+        image=self._overlay(image,scene.get("text_overlay",""))
+        image.save(path)
     def process_uploaded(self,path:str,scene:dict,index:int)->str:
         out=DIRS["images"]/f"scene_{index}.png";image=_cover(Image.open(path));image=ImageEnhance.Contrast(image).enhance(1.1);image=ImageEnhance.Color(image).enhance(1.15)
         image=self._overlay(image,scene.get("text_overlay",""),dark=True);image.save(out);return str(out)
