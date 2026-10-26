@@ -376,10 +376,12 @@ class ThumbnailGenerator:
         for line_number, (line, line_height) in enumerate(zip(lines, line_heights)):
             self._draw_centered(draw, line, main_font, y, fill=GOLD if line_number == 0 else (255, 255, 248),
                                 stroke_width=7, stroke_fill=(4, 6, 11))
-            y += line_height + 3
+            y += line_height + 8
         if subtitle:
             subtitle_font, subtitle_lines = _fit_lines(subtitle, draw, WIDTH - 180, 1, 42, 27)
-            self._draw_centered(draw, subtitle_lines[0], subtitle_font, y + 1,
+            # Keep the supporting line visually separate from the headline's heavy outline.
+            subtitle_gap = 20
+            self._draw_centered(draw, subtitle_lines[0], subtitle_font, y + subtitle_gap,
                                 fill=(255, 255, 248), stroke_width=5, stroke_fill=(4, 6, 11))
 
         # Dark footer strips make concise script-specific scene labels easy to scan.
