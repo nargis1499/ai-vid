@@ -29,7 +29,6 @@ DEFAULTS = {
     "TTS_ENGINE": "chatterbox",
     "CHATTERBOX_PYTHON": "",
     "USE_LOCAL_IMAGES": False,
-    "USE_LOCAL_VIDEO": False,
     "USE_NVENC": True,
     "PEXELS_API_KEY": "",
     "YOUTUBE_PRIVACY_STATUS": "private",
@@ -40,7 +39,7 @@ DEFAULTS = {
     "FFMPEG_BINARY": "ffmpeg-imageio",
     "OUTPUT_DIR": "",
 }
-BOOL_KEYS = {"USE_OLLAMA", "OLLAMA_AUTO_START", "OLLAMA_KEEP_ALIVE", "USE_LOCAL_IMAGES", "USE_LOCAL_VIDEO", "USE_NVENC"}
+BOOL_KEYS = {"USE_OLLAMA", "OLLAMA_AUTO_START", "OLLAMA_KEEP_ALIVE", "USE_LOCAL_IMAGES", "USE_NVENC"}
 PUBLIC_KEYS = set(DEFAULTS) - {"PEXELS_API_KEY", "OPENROUTER_API_KEY"}
 
 
@@ -101,9 +100,6 @@ def save_settings(updates):
         raise ValueError("Batch delay must be from 0 to 3600 seconds.")
     if not 1 <= current["GPU_MEMORY_LIMIT_GB"] <= 64:
         raise ValueError("GPU memory limit must be from 1 to 64 GB.")
-    if current["USE_LOCAL_VIDEO"] and not current["USE_LOCAL_IMAGES"]:
-        # SVD can animate stock or uploaded stills too, so this is allowed.
-        pass
     settings_path = Path(current["OUTPUT_DIR"]).expanduser()
     settings_path.mkdir(parents=True, exist_ok=True)
     try:
