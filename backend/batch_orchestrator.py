@@ -1,5 +1,5 @@
 """Background, sequential batch controller for the complete video pipeline."""
-import gc, threading, time, uuid, os, requests, copy, re, unicodedata
+import gc, threading, time, uuid, os, requests, copy, re, unicodedata, traceback
 from datetime import datetime
 from common import DIRS, env_bool
 from script_generator import ScriptGenerator
@@ -16,7 +16,7 @@ VIDEO_STEP_KEYS=("script","images","clips","audio","assembly","subtitles","music
 
 class BatchOrchestrator:
     def __init__(self):
-        self.scripts=ScriptGenerator();self.audio=AudioGenerator();self.images=ImageGenerator();self.fetcher=VideoFetcher();self.local=LocalAIGenerator();self.assembler=VideoAssembler();self.thumbnails=ThumbnailGenerator(self.local);self.seo=YouTubeSEO();self.youtube=YouTubeUploader()
+        self.scripts=ScriptGenerator();self.audio=AudioGenerator();self.images=ImageGenerator();self.fetcher=VideoFetcher();self.local=LocalAIGenerator();self.assembler=VideoAssembler();self.thumbnails=ThumbnailGenerator();self.seo=YouTubeSEO();self.youtube=YouTubeUploader()
         self.batches={};self.lock=threading.RLock();self.pipeline_lock=threading.Lock();self.sequence=int(time.time())
     def start_batch(self,titles:list,duration:int,niche:str,auto_upload:bool,privacy:str,custom_scripts=None,resolution="720p")->str:
         batch_id=datetime.utcnow().strftime("%Y%m%dT%H%M%S")+"-"+uuid.uuid4().hex[:6]
@@ -50,8 +50,29 @@ class BatchOrchestrator:
             batch["progress"]=round(100*(batch["completed"]+progress/100)/max(1,batch["total"]))
     def _process_batch(self,batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts=None,resolution="720p"):
         # Serialize independent batches too: never overlap GPU model loads or media assembly.
-        with self.pipeline_lock:
-            self._run_batch_locked(batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts,resolution)
+        try:
+            with self.pipeline_lock:
+                self._run_batch_locked(batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts,resolution)
+        except Exception as exc:
+            error=f"Batch stopped unexpectedly: {type(exc).__name__}: {exc}"
+            print(f"[batch] {batch_id}: {error}")
+            traceback.print_exc()
+            with self.lock:
+                batch=self.batches.get(batch_id)
+                if not batch or batch.get("status")=="completed":
+                    return
+                for video in batch.get("videos",[]):
+                    if video.get("status") not in {"waiting","processing"}:
+                        continue
+                    steps=video.setdefault("steps",{key:"pending" for key in VIDEO_STEP_KEYS})
+                    stage=video.get("current_stage")
+                    if stage in steps:
+                        steps[stage]="failed"
+                    video.update(status="failed",error=error,steps=steps,progress_message=error)
+                    batch["completed"]+=1
+                    batch["failed"]+=1
+                batch.update(status="failed",error=error,finished_at=datetime.utcnow().isoformat()+"Z")
+                batch["progress"]=round(100*batch["completed"]/max(1,batch["total"]))
     def _run_batch_locked(self,batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts=None,resolution="720p"):
         self._set(batch_id,status="running")
         for index,title in enumerate(titles):
@@ -224,10 +245,10 @@ class BatchOrchestrator:
         except Exception as exc:
             steps["seo"]="failed";result["error"]=f"SEO generation failed: {exc}"
             report(87,"seo",result["error"],{"seo":"failed"});return result
-        thumbnail_message="Generating thumbnail artwork with the local image model and title graphics…" if env_bool("USE_LOCAL_IMAGES",False) else "Designing branded thumbnail artwork from the video title…"
-        report(88,"thumbnail",thumbnail_message)
+        report(88,"thumbnail","Creating a branded thumbnail from the scene visuals and title graphics…")
+        thumbnail_background=next((item.get("path") for item in media if item and item.get("type")=="image"),None)
         try:
-            thumb=self.thumbnails.generate(seo,title,serial);result["thumbnail_path"]=thumb;steps["thumbnail"]="done"
+            thumb=self.thumbnails.generate(seo,title,serial,background_path=thumbnail_background);result["thumbnail_path"]=thumb;steps["thumbnail"]="done"
             report(92,"thumbnail","Thumbnail artwork ready",{"thumbnail":"done"})
         except Exception as exc:
             steps["thumbnail"]="failed";result["error"]=f"Thumbnail generation failed: {exc}"
