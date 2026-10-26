@@ -73,8 +73,15 @@ class BatchOrchestrator:
         steps["clips"]="done" if any(m["type"]=="video" for m in media) else "fallback"
         audio_paths=[]
         for i,scene in enumerate(script.get("scenes",[])):
-            try:audio_paths.append(self.audio.generate(scene.get("narration",title),serial*100+i))
-            except Exception as exc:print(f"[audio] Scene narration failed: {exc}");audio_paths.append("")
+            try:
+                audio_path=self.audio.generate(scene.get("narration",title),serial*100+i)
+                if not os.path.isfile(audio_path) or os.path.getsize(audio_path)==0:
+                    raise RuntimeError("Narration output is missing or empty.")
+                audio_paths.append(audio_path)
+            except Exception as exc:
+                steps["audio"]="failed"
+                result["error"]=f"Voiceover generation failed in scene {i+1}: {exc}"
+                return result
         steps["audio"]="done" if audio_paths else "failed"
         try:
             video_path=self.assembler.create(script,media,audio_paths,base);result["video_path"]=video_path;steps["assembly"]="done"

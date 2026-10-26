@@ -45,7 +45,7 @@ The Ollama badge shows **Running** when the selected model is loaded, **Idle · 
 - NVIDIA GPU and CUDA-enabled packaged build for local diffusion models (optional; initial model weights are large).
 - Google OAuth JSON for YouTube uploads (optional).
 
-Ollama itself is a separate local program; CreatorFlow can start its service and run an installed model, but it does not install Ollama silently. Without a Pexels key, images fall back to locally generated gradients. Local SDXL/SVD are off until enabled in Settings. Edge TTS uses Microsoft's service and needs internet access.
+Ollama itself is a separate local program; CreatorFlow can start its service and run an installed model, but it does not install Ollama silently. Without a Pexels key, images fall back to locally generated gradients. Local SDXL/SVD are off until enabled in Settings. Edge TTS uses Microsoft's service and needs internet access; if it fails, the app attempts the installed operating-system speech voice for narration.
 
 ## Build from source / developer mode
 
@@ -62,6 +62,7 @@ The desktop-specific dependencies are in `backend/requirements-desktop.txt`. The
 - **MoviePy reports `cannot load module more than once per process`:** rebuild the CUDA desktop app with the latest `build-desktop-windows-cuda.bat`. The CUDA PyTorch installer can otherwise upgrade NumPy to 2.x; the current build script restores and verifies NumPy 1.26.4 before packaging.
 - **MP4 export says MoviePy/FFmpeg is required:** in Settings, set FFmpeg executable to `ffmpeg-imageio` (default) or the full path from `where.exe ffmpeg`. The packaging script bundles MoviePy, NumPy, ImageIO and the FFmpeg binary. The assembler reports the underlying import/FFmpeg error instead of hiding it. For source installs, reinstall `moviepy==1.0.3` and `imageio-ffmpeg` in the app environment.
 - **Other MP4 export failures:** install FFmpeg and add the directory containing `ffmpeg.exe` to PATH, then relaunch CreatorFlow.
+- **No voiceover:** Edge TTS requires internet access. The app now tries the local Windows speech voice if Edge TTS fails; if neither produces valid audio, it marks the video failed instead of exporting a silent MP4. Rebuild the desktop EXE to include the offline TTS fallback.
 - **No stock visuals:** add a valid Pexels key in Settings; generated gradients/stills are used otherwise.
 - **YouTube OAuth issue:** verify that the Data API is enabled and the Desktop OAuth client is selected in Settings. Test users may need to be added to the Google consent screen.
 - **Pillow/MoviePy compatibility:** the video assembler includes a compatibility alias for the legacy MoviePy 1.x `Image.ANTIALIAS` reference.
