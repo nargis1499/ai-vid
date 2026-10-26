@@ -59,9 +59,9 @@ class BatchOrchestrator:
                 except Exception:pass
         self._set(batch_id,status="completed",finished_at=datetime.utcnow().isoformat()+"Z")
     def _process_single_video(self,title,index,duration,niche,batch_id,auto_upload,privacy):
-        steps={name:"pending" for name in ("script","images","clips","audio","assembly","thumbnail","seo","upload")}
+        steps={name:"pending" for name in ("script","images","clips","audio","assembly","subtitles","music","thumbnail","seo","upload")}
         base=f"{batch_id}_{index+1}";self.sequence+=1;serial=self.sequence
-        result={"title":title,"success":False,"steps":steps,"video_path":None,"youtube_url":None,"seo":None,"error":None}
+        result={"title":title,"success":False,"steps":steps,"video_path":None,"subtitle_path":None,"youtube_url":None,"seo":None,"error":None}
         report=lambda pct,stage,message:self._update_video_progress(batch_id,index,pct,stage,message)
         report(1,"script","Writing the script and scene plan…")
         try:
@@ -101,12 +101,16 @@ class BatchOrchestrator:
                 result["error"]=f"Voiceover generation failed in scene {i+1}: {exc}"
                 return result
         steps["audio"]="done" if audio_paths else "failed"
-        report(60,"assembly","Assembling video and narration…")
+        report(60,"assembly","Adding English subtitles and title-matched instrumental music…")
         try:
             def assembly_progress(fraction):
                 report(60+int(22*max(0,min(1,fraction))),"assembly",f"Encoding video… {int(100*max(0,min(1,fraction)))}%")
-            video_path=self.assembler.create(script,media,audio_paths,base,progress_callback=assembly_progress);result["video_path"]=video_path;steps["assembly"]="done"
-            report(82,"assembly","Video and audio assembled")
+            video_path=self.assembler.create(script,media,audio_paths,base,progress_callback=assembly_progress,video_title=title);result["video_path"]=video_path
+            subtitle_path=os.path.splitext(video_path)[0]+".srt"
+            result["subtitle_path"]=subtitle_path if os.path.isfile(subtitle_path) else None
+            steps["assembly"]="done";steps["subtitles"]="done" if result["subtitle_path"] else "failed";steps["music"]="done" if self.assembler.last_music_style else "fallback"
+            if self.assembler.last_music_error:result["music_warning"]=self.assembler.last_music_error
+            report(82,"assembly","Video, subtitles, and background music assembled")
         except Exception as exc:steps["assembly"]="failed";result["error"]=f"Video assembly failed: {exc}";return result
         try:
             report(83,"seo","Preparing YouTube title, description and tags…")
