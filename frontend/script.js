@@ -11,7 +11,7 @@ const VIDEO_STEPS=[
  {key:'seo',label:'Prepare YouTube metadata',hint:'Generate title, description, tags, and publishing details.'},
  {key:'thumbnail',label:'Create thumbnail',hint:'Design the cover image for the video.'},
  {key:'upload',label:'Publish to YouTube',hint:'Uploads automatically when enabled, or use Publish to YouTube on a completed video.'},
- {key:'finalize',label:'Finish & prepare downloads',hint:'Make completed video and subtitle files available.'}
+ {key:'finalize',label:'Finish & prepare downloads',hint:'Make the video, thumbnail, and subtitle files available.'}
 ];
 function toast(message){const el=$('#toast');el.textContent=message;el.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),3500)}
 function stepDetailsMarkup(){return `<details class="step-details"><summary><span><i class="fa-solid fa-list-check"></i> Step-by-step progress</span><span class="step-count">0/${VIDEO_STEPS.length}</span></summary><ol class="step-list">${VIDEO_STEPS.map((step,index)=>`<li class="step-item" data-step="${step.key}"><span class="step-marker">${String(index+1).padStart(2,'0')}</span><div class="step-copy"><b>${step.label}</b><small class="step-message">Waiting to start</small><span class="step-mini-track"><i></i></span></div><span class="step-status">WAITING</span></li>`).join('')}</ol></details>`}
@@ -143,6 +143,7 @@ async function pollBatch(){
    }
    if(video.video_path&&!row.querySelector('.video-download')){const link=document.createElement('a');link.href=`/api/video/${encodeURIComponent(activeBatch)}/${index}`;link.textContent='Download video';link.className='video-download';link.setAttribute('download','');row.querySelector('b').append(' ',link)}
    if(video.subtitle_path&&!row.querySelector('.subtitle-download')){const link=document.createElement('a');link.href=`/api/subtitles/${encodeURIComponent(activeBatch)}/${index}`;link.textContent='Subtitles (.srt)';link.className='subtitle-download';link.setAttribute('download','');row.querySelector('b').append(' ',link)}
+   if(video.thumbnail_path&&!row.querySelector('.thumbnail-download')){const link=document.createElement('a');link.href=`/api/thumbnail/${encodeURIComponent(activeBatch)}/${index}`;link.textContent='Thumbnail (.jpg)';link.className='thumbnail-download';link.setAttribute('download','');row.querySelector('b').append(' ',link)}
    let publishButton=row.querySelector('.publish-button'),publishError=row.querySelector('.publish-error');
    if(data.auto_upload===false&&video.status==='done'&&video.video_path&&!video.youtube_url){
     if(!publishButton){publishButton=document.createElement('button');publishButton.type='button';publishButton.className='publish-button';publishButton.dataset.index=String(index);row.querySelector('.video-row-main').append(publishButton)}

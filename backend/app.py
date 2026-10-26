@@ -280,6 +280,14 @@ def get_subtitles(batch_id,index):
     if not path or not Path(path).is_file():return jsonify({"error":"Subtitles are not ready"}),404
     return send_file(path,as_attachment=True,download_name=Path(path).name,mimetype="application/x-subrip")
 
+@app.get("/api/thumbnail/<batch_id>/<int:index>")
+def get_thumbnail(batch_id,index):
+    batch=orchestrator.get_status(batch_id)
+    if not batch or index<0 or index>=len(batch["videos"]):return jsonify({"error":"Thumbnail not found"}),404
+    path=batch["videos"][index].get("thumbnail_path")
+    if not path or not Path(path).is_file():return jsonify({"error":"Thumbnail is not ready"}),404
+    return send_file(path,as_attachment=True,download_name=Path(path).name,mimetype="image/jpeg")
+
 @app.get("/api/openrouter/free-models")
 def openrouter_free_models():
     try:
