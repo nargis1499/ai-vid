@@ -113,9 +113,13 @@ Writing brief:
                         detail = str(error_data)
                 except (ValueError, AttributeError):
                     detail = str(getattr(error_response, "text", ""))
-            detail = " ".join(detail.split())[:500]
+            if not detail:
+                # Connection/TLS/DNS failures have no HTTP response, so include the
+                # underlying Requests message instead of hiding the useful cause.
+                detail = str(exc).strip() or "No HTTP response was received; check network, DNS, proxy, and firewall access."
+            detail = " ".join(detail.split())[:700]
             suffix = f" HTTP {status}" if status else ""
-            raise RuntimeError(f"Gemini API request failed{suffix}{': ' + detail if detail else ''}") from exc
+            raise RuntimeError(f"Gemini API request failed{suffix}: {detail}") from exc
         if payload.get("status") not in {None, "completed"}:
             raise RuntimeError(f"Gemini interaction did not complete (status: {payload.get('status')}).")
         pieces = []
