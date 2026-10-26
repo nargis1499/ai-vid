@@ -19,7 +19,12 @@ if ($Cuda) {
     Write-Host 'Installing the CUDA 12.1 PyTorch build for NVIDIA GPUs...' -ForegroundColor Cyan
     & $venvPython -m pip install --force-reinstall torch==2.2.0 torchvision==0.17.0 --index-url https://download.pytorch.org/whl/cu121
     if ($LASTEXITCODE -ne 0) { throw 'CUDA PyTorch installation failed. Review your driver and internet connection.' }
+    # Re-pin after the CUDA install: its unconstrained dependency resolution can otherwise upgrade NumPy to 2.x.
+    & $venvPython -m pip install --force-reinstall numpy==1.26.4
+    if ($LASTEXITCODE -ne 0) { throw 'Could not restore the supported NumPy 1.26.4 version.' }
 }
+& $venvPython -c "import numpy; print('Packaging with NumPy', numpy.__version__); assert numpy.__version__ == '1.26.4', 'NumPy must be 1.26.4 for this MoviePy/PyInstaller build.'"
+if ($LASTEXITCODE -ne 0) { throw 'The build environment has an unsupported NumPy version.' }
 
 Push-Location $backend
 try {
@@ -28,6 +33,7 @@ try {
         --name CreatorFlow `
         --add-data "$repoRoot\frontend;frontend" `
         --collect-all moviepy `
+        --collect-all numpy `
         --collect-all imageio `
         --collect-all imageio_ffmpeg `
         --collect-all proglog `
