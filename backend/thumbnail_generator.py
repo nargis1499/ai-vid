@@ -4,17 +4,18 @@ from PIL import Image,ImageDraw,ImageEnhance,ImageFont
 from common import DIRS
 from image_generator import _font, _cover
 class ThumbnailGenerator:
-    def __init__(self,local_ai=None):self.local_ai=local_ai
-    def generate(self,seo:dict,title:str,index:int)->str:
+    def generate(self,seo:dict,title:str,index:int,background_path:str|None=None)->str:
         path=DIRS["thumbnails"]/f"thumb_{index}.jpg"
         background=None
-        if self.local_ai:
-            local=self.local_ai.generate_image(f"youtube thumbnail background, {seo.get('thumbnail_style',title)}, vibrant, high contrast",index+10000)
-            if local:
-                try:background=Image.open(local)
-                except Exception:pass
+        if background_path:
+            try:
+                with Image.open(background_path) as source:
+                    background=source.copy()
+            except Exception as exc:
+                print(f"[thumbnail] Could not reuse scene still; using generated graphic background: {exc}")
         if background is None:
-            # Reuse the stable, dependency-light gradient renderer.
+            # Avoid loading a second full SDXL pipeline just for the thumbnail. Reuse
+            # generated scene stills when available; otherwise use the lightweight graphic.
             from image_generator import ImageGenerator
             temp=DIRS["thumbnails"]/f"_background_{index}.png";ImageGenerator._gradient(seo.get("thumbnail_style") or title,temp);background=Image.open(temp)
         image=_cover(background);image=ImageEnhance.Contrast(image).enhance(1.3);image=ImageEnhance.Color(image).enhance(1.4);image=ImageEnhance.Brightness(image).enhance(1.1)
