@@ -4,7 +4,7 @@ A local-first YouTube video automation studio. Enter a list of titles and it bui
 
 ![CreatorFlow studio UI preview](screenshots/creator-studio-preview.png)
 
-**Default mode is safe and lightweight:** Ollama (if running) is used for scripts and metadata; image generation falls back to locally-created gradients when no Pexels key is configured; optional GPU image/video generation is off until you enable it. YouTube uploads are opt-in per batch.
+**Default mode is safe and lightweight:** Ollama (if running) is used for scripts and metadata; image generation falls back to locally-created gradients when no Pexels key is configured; optional GPU image/video generation is off until you enable it. YouTube uploads are opt-in per batch. The studio header reports whether the configured Ollama model is loaded, installed but idle, missing, or unreachable; Ollama normally loads models on demand when a generation request arrives.
 
 ## Requirements
 

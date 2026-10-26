@@ -1,9 +1,10 @@
 """Flask API and static frontend for YouTube Auto Creator."""
 import os
+import requests
 from pathlib import Path
 from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
-from common import DIRS, ROOT_DIR
+from common import DIRS, ROOT_DIR, env_bool
 from batch_orchestrator import BatchOrchestrator
 
 app=Flask(__name__,static_folder=None)
@@ -44,6 +45,43 @@ def youtube_auth():
     return jsonify(orchestrator.youtube.status()),(200 if ok else 400)
 @app.get("/api/youtube/status")
 def youtube_status():return jsonify(orchestrator.youtube.status())
+
+@app.get("/api/ollama/status")
+def ollama_status():
+    """Report service reachability, model installation, and actual model load state."""
+    model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b").strip()
+    if not env_bool("USE_OLLAMA", True):
+        return jsonify({"state":"disabled","model":model,"installed":False,"loaded":False,"detail":"Ollama use is disabled in backend/.env."})
+    base_url=os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+    try:
+        tags_response=requests.get(f"{base_url}/api/tags", timeout=2.5)
+        tags_response.raise_for_status()
+        installed_models=tags_response.json().get("models", [])
+        def same_model(candidate):
+            name=str(candidate or "").strip().lower()
+            target=model.lower()
+            return name==target or name==target+":latest" or (target.endswith(":latest") and name==target[:-7])
+        installed=any(same_model(entry.get("name") or entry.get("model")) for entry in installed_models)
+        loaded=False
+        try:
+            ps_response=requests.get(f"{base_url}/api/ps", timeout=2.5)
+            ps_response.raise_for_status()
+            loaded=any(same_model(entry.get("name") or entry.get("model")) for entry in ps_response.json().get("models", []))
+        except requests.RequestException:
+            # Service is reachable even if its process-list endpoint is unavailable.
+            loaded=False
+        if loaded:
+            state,detail="running",f"{model} is loaded and running in Ollama."
+        elif installed:
+            state,detail="ready",f"{model} is installed; Ollama loads it when a generation request arrives."
+        else:
+            state,detail="missing",f"Ollama is reachable, but {model} is not installed. Run: ollama pull {model}"
+        return jsonify({"state":state,"model":model,"installed":installed,"loaded":loaded,"detail":detail})
+    except requests.RequestException:
+        return jsonify({"state":"offline","model":model,"installed":False,"loaded":False,"detail":f"Cannot reach Ollama at {base_url}. Start the Ollama app/service."})
+    except (ValueError, TypeError) as exc:
+        return jsonify({"state":"error","model":model,"installed":False,"loaded":False,"detail":f"Could not read Ollama status: {exc}"})
+
 @app.get("/api/video/<batch_id>/<int:index>")
 def get_video(batch_id,index):
     batch=orchestrator.get_status(batch_id)
