@@ -16,11 +16,11 @@ class BatchOrchestrator:
     def __init__(self):
         self.scripts=ScriptGenerator();self.audio=AudioGenerator();self.images=ImageGenerator();self.fetcher=VideoFetcher();self.local=LocalAIGenerator();self.assembler=VideoAssembler();self.thumbnails=ThumbnailGenerator(self.local);self.seo=YouTubeSEO();self.youtube=YouTubeUploader()
         self.batches={};self.lock=threading.RLock();self.pipeline_lock=threading.Lock();self.sequence=int(time.time())
-    def start_batch(self,titles:list,duration:int,niche:str,auto_upload:bool,privacy:str,custom_scripts=None)->str:
+    def start_batch(self,titles:list,duration:int,niche:str,auto_upload:bool,privacy:str,custom_scripts=None,resolution="720p")->str:
         batch_id=datetime.utcnow().strftime("%Y%m%dT%H%M%S")+"-"+uuid.uuid4().hex[:6]
-        data={"batch_id":batch_id,"created_at":datetime.utcnow().isoformat()+"Z","status":"queued","total":len(titles),"completed":0,"failed":0,"progress":0,"videos":[{"title":t,"status":"waiting","progress":0,"current_stage":"Waiting","progress_message":"Queued","steps":{}} for t in titles],"error":None}
+        data={"batch_id":batch_id,"created_at":datetime.utcnow().isoformat()+"Z","status":"queued","total":len(titles),"completed":0,"failed":0,"progress":0,"resolution":resolution,"videos":[{"title":t,"status":"waiting","progress":0,"current_stage":"Waiting","progress_message":"Queued","steps":{}} for t in titles],"error":None}
         with self.lock:self.batches[batch_id]=data
-        threading.Thread(target=self._process_batch,args=(batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts),daemon=True,name=f"batch-{batch_id}").start()
+        threading.Thread(target=self._process_batch,args=(batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts,resolution),daemon=True,name=f"batch-{batch_id}").start()
         return batch_id
     def get_status(self,batch_id):
         with self.lock:
@@ -38,16 +38,16 @@ class BatchOrchestrator:
             video=batch["videos"][index]
             video.update(progress=progress,current_stage=stage,progress_message=message)
             batch["progress"]=round(100*(batch["completed"]+progress/100)/max(1,batch["total"]))
-    def _process_batch(self,batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts=None):
+    def _process_batch(self,batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts=None,resolution="720p"):
         # Serialize independent batches too: never overlap GPU model loads or media assembly.
         with self.pipeline_lock:
-            self._run_batch_locked(batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts)
-    def _run_batch_locked(self,batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts=None):
+            self._run_batch_locked(batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts,resolution)
+    def _run_batch_locked(self,batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts=None,resolution="720p"):
         self._set(batch_id,status="running")
         for index,title in enumerate(titles):
             with self.lock:self.batches[batch_id]["videos"][index].update(status="processing",started_at=datetime.utcnow().isoformat()+"Z")
             custom_script=custom_scripts[index] if custom_scripts and index<len(custom_scripts) else None
-            try:result=self._process_single_video(title,index,duration,niche,batch_id,auto_upload,privacy,custom_script)
+            try:result=self._process_single_video(title,index,duration,niche,batch_id,auto_upload,privacy,custom_script,resolution)
             except Exception as exc:result={"title":title,"success":False,"steps":{},"error":str(exc)}
             with self.lock:
                 videos=self.batches[batch_id]["videos"];videos[index].update(result,status="done" if result.get("success") else "failed")
@@ -74,7 +74,7 @@ class BatchOrchestrator:
             candidate=stem[:100-len(suffix)].rstrip("-._")+suffix
             counter+=1
         return candidate
-    def _process_single_video(self,title,index,duration,niche,batch_id,auto_upload,privacy,custom_script=None):
+    def _process_single_video(self,title,index,duration,niche,batch_id,auto_upload,privacy,custom_script=None,resolution="720p"):
         steps={name:"pending" for name in ("script","images","clips","audio","assembly","subtitles","music","thumbnail","seo","upload")}
         base=self._title_video_stem(title);self.sequence+=1;serial=self.sequence
         result={"title":title,"success":False,"steps":steps,"video_path":None,"subtitle_path":None,"youtube_url":None,"seo":None,"error":None}
@@ -125,7 +125,7 @@ class BatchOrchestrator:
         try:
             def assembly_progress(fraction):
                 report(60+int(22*max(0,min(1,fraction))),"assembly",f"Encoding video… {int(100*max(0,min(1,fraction)))}%")
-            video_path=self.assembler.create(script,media,audio_paths,base,progress_callback=assembly_progress,video_title=title);result["video_path"]=video_path
+            video_path=self.assembler.create(script,media,audio_paths,base,progress_callback=assembly_progress,video_title=title,resolution=resolution);result["video_path"]=video_path
             subtitle_path=os.path.splitext(video_path)[0]+".srt"
             result["subtitle_path"]=subtitle_path if os.path.isfile(subtitle_path) else None
             steps["assembly"]="done";steps["subtitles"]="done" if result["subtitle_path"] else "failed";steps["music"]="done" if self.assembler.last_music_style else "fallback"

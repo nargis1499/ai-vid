@@ -11,7 +11,12 @@ class VideoAssembler:
     TRANSITION_STYLES = ("crossfade", "slide-left", "zoom-push", "slide-up")
 
     def create(self, script: dict, media_items: list, audio_paths: list, video_id: str,
-               progress_callback=None, video_title: str | None = None) -> str:
+               progress_callback=None, video_title: str | None = None,
+               resolution: str = "720p") -> str:
+        output_size = {"720p": (1280, 720), "1080p": (1920, 1080)}.get(str(resolution).lower())
+        if output_size is None:
+            raise ValueError("resolution must be 720p or 1080p")
+        target_width, target_height = output_size
         self.last_music_style = None
         self.last_music_error = None
         try:
@@ -98,18 +103,21 @@ class VideoAssembler:
                     else:
                         start = max(0, (clip.duration - duration) / 2)
                         clip = clip.subclip(start, start + duration)
-                    clip = clip.resize(height=720)
-                    if clip.w < 1280:
-                        clip = clip.resize(width=1280)
-                    clip = clip.crop(x_center=clip.w/2, y_center=clip.h/2, width=1280, height=720)
+                    clip = clip.resize(height=target_height)
+                    if clip.w < target_width:
+                        clip = clip.resize(width=target_width)
+                    clip = clip.crop(x_center=clip.w/2, y_center=clip.h/2,
+                                     width=target_width, height=target_height)
                 else:
-                    clip = ImageClip(item["path"]).set_duration(duration).resize(height=720)
-                    if clip.w < 1280:
-                        clip = clip.resize(width=1280)
-                    clip = clip.crop(x_center=clip.w/2, y_center=clip.h/2, width=1280, height=720)
+                    clip = ImageClip(item["path"]).set_duration(duration).resize(height=target_height)
+                    if clip.w < target_width:
+                        clip = clip.resize(width=target_width)
+                    clip = clip.crop(x_center=clip.w/2, y_center=clip.h/2,
+                                     width=target_width, height=target_height)
                     # Subtle scale-up creates a gentle Ken Burns move without ImageMagick.
                     clip = clip.resize(lambda t: 1 + 0.08 * (t / max(duration, 0.001))).crop(
-                        x_center=clip.w/2, y_center=clip.h/2, width=1280, height=720)
+                        x_center=clip.w/2, y_center=clip.h/2,
+                        width=target_width, height=target_height)
                 clips.append(clip)
 
             if not clips:
@@ -117,7 +125,7 @@ class VideoAssembler:
             for index in range(1, len(clips)):
                 style = self.TRANSITION_STYLES[(index - 1) % len(self.TRANSITION_STYLES)]
                 clips[index] = self._apply_scene_transition(
-                    clips[index], style, self.TRANSITION_DURATION, (1280, 720)
+                    clips[index], style, self.TRANSITION_DURATION, output_size
                 )
             final = concatenate_videoclips(
                 clips, method="compose", padding=-self.TRANSITION_DURATION

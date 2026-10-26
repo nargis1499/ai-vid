@@ -27,7 +27,7 @@ async function startBatch(){
  }
  const button=$('#generate');button.disabled=true;button.querySelector('span:nth-child(2)').textContent='Starting your batch…';
  try{
-  const payload={titles,duration:Number($('#duration').value),niche:$('#niche').value,privacy:$('#privacy').value,auto_upload:$('#auto-upload').checked};
+  const payload={titles,duration:Number($('#duration').value),resolution:$('#resolution').value,niche:$('#niche').value,privacy:$('#privacy').value,auto_upload:$('#auto-upload').checked};
   if(useCustom)payload.custom_scripts=customScripts;
   const response=await fetch('/api/batch/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   const data=await response.json();if(!response.ok)throw new Error(data.error||'Unable to start batch');
