@@ -59,7 +59,8 @@ The desktop-specific dependencies are in `backend/requirements-desktop.txt`. The
 - **The EXE cannot open a window:** install/update Microsoft Edge WebView2 Runtime and relaunch.
 - **Ollama is offline:** install the Ollama Windows app. CreatorFlow can start its service; use Settings → **Start / load model** to retry. Ensure the model selected in Settings is installed, or choose **Download model**.
 - **Local AI reports no GPU:** the standard build may not contain the CUDA wheel. Rebuild with `build-desktop-windows-cuda.bat`, update your NVIDIA driver, and check that the GPU is available.
-- **MP4 export fails:** install FFmpeg, add the directory containing `ffmpeg.exe` to PATH, then relaunch CreatorFlow.
+- **MP4 export says MoviePy/FFmpeg is required:** in Settings, set FFmpeg executable to `ffmpeg-imageio` (default) or the full path from `where.exe ffmpeg`. If using the packaged EXE, pull the latest `main` and rebuild with `build-desktop-windows.bat`; the current script explicitly bundles MoviePy, ImageIO and the FFmpeg binary. The assembler now reports the underlying import/FFmpeg error instead of hiding it. For source installs, reinstall `moviepy==1.0.3` and `imageio-ffmpeg` in the app environment.
+- **Other MP4 export failures:** install FFmpeg and add the directory containing `ffmpeg.exe` to PATH, then relaunch CreatorFlow.
 - **No stock visuals:** add a valid Pexels key in Settings; generated gradients/stills are used otherwise.
 - **YouTube OAuth issue:** verify that the Data API is enabled and the Desktop OAuth client is selected in Settings. Test users may need to be added to the Google consent screen.
 - **Pillow/MoviePy compatibility:** the video assembler includes a compatibility alias for the legacy MoviePy 1.x `Image.ANTIALIAS` reference.
