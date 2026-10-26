@@ -7,6 +7,9 @@ from common import DIRS
 
 
 class VideoAssembler:
+    TRANSITION_DURATION = 0.5
+    TRANSITION_STYLES = ("crossfade", "slide-left", "zoom-push", "slide-up")
+
     def create(self, script: dict, media_items: list, audio_paths: list, video_id: str,
                progress_callback=None, video_title: str | None = None) -> str:
         self.last_music_style = None
@@ -59,11 +62,14 @@ class VideoAssembler:
         clips = []
         audios = []
         subtitle_clips = []
-        music_clip = music_loop = mixed_audio = None
+        music_clip = music_loop = mixed_audio = voice_track = None
+        voice_parts = []
         final = None
         try:
             speech_durations = []
             scene_durations = []
+            scene_starts = []
+            scene_cursor = 0.0
             scenes = script.get("scenes", [])
             for i, item in enumerate(media_items):
                 if i >= len(audio_paths) or not audio_paths[i]:
@@ -80,6 +86,9 @@ class VideoAssembler:
                 duration = max(2.0, speech_duration + 0.5)
                 speech_durations.append(speech_duration)
                 scene_durations.append(duration)
+                scene_starts.append(scene_cursor)
+                voice_parts.append(audio.subclip(0, min(duration, speech_duration)).set_start(scene_cursor))
+                scene_cursor += duration - self.TRANSITION_DURATION
                 if item.get("type") == "video":
                     clip = VideoFileClip(item["path"], audio=False)
                     if clip.duration < duration:
@@ -101,25 +110,30 @@ class VideoAssembler:
                     # Subtle scale-up creates a gentle Ken Burns move without ImageMagick.
                     clip = clip.resize(lambda t: 1 + 0.08 * (t / max(duration, 0.001))).crop(
                         x_center=clip.w/2, y_center=clip.h/2, width=1280, height=720)
-                clip = clip.set_audio(audio.subclip(0, min(duration, speech_duration)))
-                clip = clip.fadein(0.4).fadeout(0.4)
                 clips.append(clip)
 
             if not clips:
                 raise RuntimeError("No usable scene media was generated")
-            final = concatenate_videoclips(clips, method="compose", padding=-0.3)
+            for index in range(1, len(clips)):
+                style = self.TRANSITION_STYLES[(index - 1) % len(self.TRANSITION_STYLES)]
+                clips[index] = self._apply_scene_transition(
+                    clips[index], style, self.TRANSITION_DURATION, (1280, 720)
+                )
+            final = concatenate_videoclips(
+                clips, method="compose", padding=-self.TRANSITION_DURATION
+            )
+            voice_track = CompositeAudioClip(voice_parts).set_duration(final.duration)
             title = video_title or script.get("title") or "Video"
 
-            # Captions use the exact narration text and audio duration for each scene.
+            # Captions use the exact revised narration and follow each scene's transition-aware start time.
             subtitle_clips, subtitle_entries = self._make_subtitles(
-                scenes, speech_durations, scene_durations, final.duration, final.size
+                scenes, speech_durations, scene_starts, final.duration, final.size
             )
             subtitle_path = DIRS["videos"] / f"{video_id}.srt"
             subtitle_path.write_text(self._format_srt(subtitle_entries), encoding="utf-8")
             if subtitle_clips:
                 captioned = CompositeVideoClip([final] + subtitle_clips, size=final.size)
-                captioned = captioned.set_duration(final.duration).set_audio(final.audio)
-                final = captioned
+                final = captioned.set_duration(final.duration)
 
             # A deterministic, original instrumental loop is selected by title keywords.
             try:
@@ -129,12 +143,13 @@ class VideoAssembler:
                 music_clip = AudioFileClip(music_path)
                 music_loop = audio_loop(music_clip, duration=final.duration).volumex(0.10)
                 music_loop = music_loop.set_duration(final.duration)
-                mixed_audio = CompositeAudioClip([final.audio, music_loop]).set_duration(final.duration)
+                mixed_audio = CompositeAudioClip([voice_track, music_loop]).set_duration(final.duration)
                 final = final.set_audio(mixed_audio)
                 print(f"[music] Selected {music_style} instrumental bed for: {title}")
             except Exception as exc:
                 # Keep the narration/video usable if optional instrumental synthesis fails.
                 self.last_music_error = str(exc)
+                final = final.set_audio(voice_track)
                 print(f"[music] Could not add background music; continuing with narration only: {exc}")
 
             # Finish with a polished fade from black and fade to black, plus matching audio fades.
@@ -153,7 +168,7 @@ class VideoAssembler:
                 progress_callback(1.0)
             return str(path)
         finally:
-            for clip in (final, music_loop, mixed_audio, music_clip):
+            for clip in (final, music_loop, mixed_audio, music_clip, voice_track):
                 try:
                     if clip is not None:
                         clip.close()
@@ -164,14 +179,32 @@ class VideoAssembler:
                     clip.close()
                 except Exception:
                     pass
-            for audio in audios:
+            for audio in voice_parts + audios:
                 try:
                     audio.close()
                 except Exception:
                     pass
 
+    @staticmethod
+    def _apply_scene_transition(clip, style, duration, frame_size):
+        width, height = frame_size
+        if style == "slide-left":
+            return clip.crossfadein(min(0.14, duration)).set_position(
+                lambda t: (int(width * (1 - min(1.0, max(0.0, t) / duration))), 0)
+            )
+        if style == "slide-up":
+            return clip.crossfadein(min(0.14, duration)).set_position(
+                lambda t: (0, int(height * (1 - min(1.0, max(0.0, t) / duration))))
+            )
+        if style == "zoom-push":
+            zoomed = clip.resize(lambda t: 1.10 - 0.10 * min(1.0, max(0.0, t) / duration))
+            zoomed = zoomed.crop(x_center=zoomed.w / 2, y_center=zoomed.h / 2,
+                                 width=width, height=height)
+            return zoomed.crossfadein(min(0.18, duration))
+        return clip.crossfadein(duration)
+
     @classmethod
-    def _make_subtitles(cls, scenes, speech_durations, scene_durations, video_duration, frame_size):
+    def _make_subtitles(cls, scenes, speech_durations, scene_starts, video_duration, frame_size):
         import numpy as np
         from PIL import Image, ImageDraw, ImageFont
         from moviepy.editor import ImageClip
@@ -180,9 +213,8 @@ class VideoAssembler:
         font = cls._subtitle_font(ImageFont, max(32, int(frame_h * 0.058)))
         cue_clips = []
         entries = []
-        cursor = 0.0
         for i, scene in enumerate(scenes):
-            if i >= len(speech_durations) or i >= len(scene_durations):
+            if i >= len(speech_durations) or i >= len(scene_starts):
                 break
             narration = str(scene.get("narration") or "").strip()
             chunks = cls._caption_chunks(narration)
@@ -192,7 +224,7 @@ class VideoAssembler:
                 cue_cursor = 0.0
                 for chunk in chunks:
                     cue_duration = speech_duration * len(chunk.split()) / total_words
-                    start = min(video_duration, cursor + cue_cursor)
+                    start = min(video_duration, scene_starts[i] + cue_cursor)
                     end = min(video_duration, start + cue_duration)
                     if end - start > 0.08:
                         image = cls._caption_image(chunk, Image, ImageDraw, ImageFont, font, frame_w)
@@ -202,7 +234,6 @@ class VideoAssembler:
                         cue_clips.append(overlay.set_start(start).set_duration(end - start).set_position((x, y)))
                         entries.append((start, end, chunk))
                     cue_cursor += cue_duration
-            cursor += max(0.0, scene_durations[i] - 0.3)
         return cue_clips, entries
 
     @staticmethod
