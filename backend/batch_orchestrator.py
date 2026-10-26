@@ -97,6 +97,9 @@ class BatchOrchestrator:
         report=lambda pct,stage,message,step_updates=None:self._update_video_progress(batch_id,index,pct,stage,message,step_updates)
         model_name=getattr(self.scripts,"model","local AI model")
         if custom_script is not None:script_message=f"Submitting your draft to Ollama {model_name} for analysis and rewrite…"
+        elif self.scripts.gemini_ready:script_message=f"Asking Google AI Studio {self.scripts.gemini_model} to draft narration; Ollama {model_name} will finalize the script and scene plan…"
+        elif self.scripts.provider=="gemini" and self.scripts.gemini_api_key and not self.scripts.enabled:script_message="Gemini drafting is skipped because Ollama finalization is disabled; using the built-in template fallback…"
+        elif self.scripts.provider=="gemini" and not self.scripts.gemini_api_key and self.scripts.enabled:script_message=f"Google AI Studio key is not configured; asking Ollama {model_name} to write narration and plan scenes…"
         elif self.scripts.enabled:script_message=f"Asking Ollama {model_name} to write narration and plan scenes…"
         else:script_message="Creating narration and scene plan from the built-in template…"
         report(1,"script",script_message)

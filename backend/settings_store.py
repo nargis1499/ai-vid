@@ -17,6 +17,9 @@ SETTINGS_FILE = APP_DATA_DIR / "settings.json"
 
 DEFAULTS = {
     "USE_OLLAMA": True,
+    "SCRIPT_PROVIDER": "gemini",
+    "GEMINI_MODEL": "gemini-3.8-flash",
+    "GEMINI_API_KEY": "",
     "OLLAMA_MODEL": "qwen2.5:7b",
     "OLLAMA_URL": "http://localhost:11434",
     "OLLAMA_EXECUTABLE": "",
@@ -38,7 +41,7 @@ DEFAULTS = {
     "OUTPUT_DIR": "",
 }
 BOOL_KEYS = {"USE_OLLAMA", "OLLAMA_AUTO_START", "OLLAMA_KEEP_ALIVE", "USE_LOCAL_IMAGES", "USE_LOCAL_VIDEO", "USE_NVENC"}
-PUBLIC_KEYS = set(DEFAULTS) - {"PEXELS_API_KEY"}
+PUBLIC_KEYS = set(DEFAULTS) - {"PEXELS_API_KEY", "GEMINI_API_KEY"}
 
 
 def load_settings():
@@ -69,12 +72,16 @@ def save_settings(updates):
             current[key] = value is True or str(value).strip().lower() in {"true", "1", "yes", "on"}
         elif key in {"MAX_UPLOADS_PER_DAY", "BATCH_DELAY_SECONDS", "GPU_MEMORY_LIMIT_GB"}:
             current[key] = int(value)
-        elif key == "PEXELS_API_KEY":
+        elif key in {"PEXELS_API_KEY", "GEMINI_API_KEY"}:
             current[key] = str(value or "").strip()
         else:
             current[key] = str(value).strip()
     if current["TTS_ENGINE"] not in {"chatterbox", "edge"}:
         raise ValueError("Narration voice engine must be Chatterbox or Edge TTS.")
+    if current["SCRIPT_PROVIDER"] not in {"gemini", "ollama"}:
+        raise ValueError("Script provider must be Google AI Studio or local Ollama.")
+    if not current["GEMINI_MODEL"].strip():
+        raise ValueError("Enter a Gemini model name, for example gemini-3.8-flash.")
     if current["YOUTUBE_PRIVACY_STATUS"] not in {"private", "unlisted", "public"}:
         raise ValueError("YouTube privacy must be private, unlisted, or public.")
     if not current["OLLAMA_MODEL"].strip():
@@ -113,6 +120,7 @@ def public_settings(settings=None):
     settings = settings or load_settings()
     result = {key: settings[key] for key in PUBLIC_KEYS}
     result["PEXELS_API_KEY_CONFIGURED"] = bool(settings.get("PEXELS_API_KEY"))
+    result["GEMINI_API_KEY_CONFIGURED"] = bool(settings.get("GEMINI_API_KEY"))
     result["YOUTUBE_CREDENTIALS_CONFIGURED"] = (APP_DATA_DIR / "client_secret.json").is_file() or (Path(__file__).resolve().parent / "client_secret.json").is_file()
     return result
 
