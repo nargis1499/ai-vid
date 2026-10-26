@@ -16,7 +16,13 @@ class LocalAIGenerator:
         pipe=None
         try:
             from diffusers import AutoPipelineForText2Image
-            pipe=AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo",torch_dtype=self.torch.float16,variant="fp16").to("cuda")
+            pipe=AutoPipelineForText2Image.from_pretrained("stabilityai/sdxl-turbo",torch_dtype=self.torch.float16,variant="fp16")
+            try: memory_budget=float(os.getenv("GPU_MEMORY_LIMIT_GB", "7"))
+            except ValueError: memory_budget=7.0
+            if memory_budget <= 5.0:
+                pipe.enable_sequential_cpu_offload()
+            else:
+                pipe.enable_model_cpu_offload()
             image=pipe("cinematic, high quality, " + prompt,width=1280,height=720,num_inference_steps=4,guidance_scale=0.0).images[0]
             path=DIRS["local_ai"]/f"ai_image_{index}.png";image.save(path);return str(path)
         except Exception as exc:print(f"[gpu] SDXL failed: {exc}");return None

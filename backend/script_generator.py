@@ -14,7 +14,7 @@ class ScriptGenerator:
         if self.enabled:
             prompt = f'''Create a compelling YouTube narration plan for the title: {title!r}. Target total duration {duration} seconds. Return ONLY valid JSON, no markdown, matching: {{"title":"...","description":"...","scenes":[{{"scene_number":1,"duration":8,"narration":"2-3 spoken sentences","visual_description":"specific cinematic visual","search_keywords":"2-3 concrete search words","text_overlay":"short phrase"}}],"tags":["tag"]}}. Make exactly {count} scenes; scene durations should sum to about {duration} seconds. Use engaging accurate language.'''
             try:
-                response = requests.post(self.url + "/api/generate", json={"model": self.model, "prompt": prompt, "stream": False, "options": {"temperature": .7}}, timeout=120)
+                response = requests.post(self.url + "/api/generate", json={"model": self.model, "prompt": prompt, "stream": False, "keep_alive": -1 if env_bool("OLLAMA_KEEP_ALIVE", True) else 0, "options": {"temperature": .7}}, timeout=120)
                 response.raise_for_status()
                 raw = response.json().get("response", "")
                 raw = re.sub(r"^\s*```(?:json)?|```\s*$", "", raw.strip(), flags=re.I)
