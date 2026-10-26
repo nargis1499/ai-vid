@@ -38,9 +38,14 @@ class AudioGenerator:
         try:
             return self._generate_system_voice(text, wav_path)
         except Exception as exc:
+            if isinstance(exc, ModuleNotFoundError) and exc.name == "pyttsx3":
+                fallback_hint = "Install the updated speech packages into the same Python environment running Flask with `python -m pip install --upgrade edge-tts==7.3.1 pyttsx3==2.99`, then restart the web backend."
+            else:
+                fallback_hint = "Check that the host has a working system speech engine (Windows SAPI, or eSpeak on Linux)."
             raise RuntimeError(
                 f"Could not create narration. Edge TTS failed ({type(edge_error).__name__}: {edge_error}); "
-                f"offline system TTS failed ({type(exc).__name__}: {exc}). Check internet access or install/enable a Windows speech voice."
+                f"offline system TTS failed ({type(exc).__name__}: {exc}). {fallback_hint} "
+                "The Edge TTS package was updated; if its WebSocket still returns HTTP 403, the Edge speech service or network is rejecting the connection."
             ) from exc
 
     def _generate_system_voice(self, text: str, path: Path) -> str:
