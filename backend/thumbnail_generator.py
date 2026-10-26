@@ -364,7 +364,7 @@ class ThumbnailGenerator:
         if kicker:
             kicker_font = _font(42)
             self._draw_centered(draw, kicker.upper(), kicker_font, 18, fill=(255, 255, 248),
-                                stroke_width=5, stroke_fill=(7, 9, 14))
+                                stroke_width=3, stroke_fill=(7, 9, 14))
             title_bottom = 66
 
         main_font, lines = _fit_lines(headline, draw, WIDTH - 110, 2, 96 if len(headline) < 25 else 86, 58)
@@ -375,14 +375,14 @@ class ThumbnailGenerator:
         y = title_bottom
         for line_number, (line, line_height) in enumerate(zip(lines, line_heights)):
             self._draw_centered(draw, line, main_font, y, fill=GOLD if line_number == 0 else (255, 255, 248),
-                                stroke_width=7, stroke_fill=(4, 6, 11))
+                                stroke_width=4, stroke_fill=(4, 6, 11))
             y += line_height + 8
         if subtitle:
             subtitle_font, subtitle_lines = _fit_lines(subtitle, draw, WIDTH - 180, 1, 42, 27)
             # Keep the supporting line visually separate from the headline's heavy outline.
             subtitle_gap = 20
             self._draw_centered(draw, subtitle_lines[0], subtitle_font, y + subtitle_gap,
-                                fill=(255, 255, 248), stroke_width=5, stroke_fill=(4, 6, 11))
+                                fill=(255, 255, 248), stroke_width=3, stroke_fill=(4, 6, 11))
 
         # Dark footer strips make concise script-specific scene labels easy to scan.
         band = Image.new("RGBA", image.size, (0, 0, 0, 0))
@@ -397,10 +397,8 @@ class ThumbnailGenerator:
             font, label_lines = _fit_lines(label, draw, right - left - 24, 1, 34, 20)
             box = draw.textbbox((0, 0), label_lines[0], font=font, stroke_width=3)
             x = left + ((right - left) - (box[2] - box[0])) // 2
-            draw.text((x + 2, HEIGHT - 78 + 3), label_lines[0], font=font,
-                      fill=(0, 0, 0), stroke_width=5, stroke_fill=(0, 0, 0))
             draw.text((x, HEIGHT - 78), label_lines[0], font=font, fill=(255, 255, 248),
-                      stroke_width=3, stroke_fill=(5, 8, 14))
+                      stroke_width=2, stroke_fill=(5, 8, 14))
         return image
 
     @staticmethod
@@ -408,8 +406,6 @@ class ThumbnailGenerator:
         bbox = draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
         width = bbox[2] - bbox[0]
         x = (WIDTH - width) // 2 - bbox[0]
-        draw.text((x + 3, y + 5), text, font=font, fill=(0, 0, 0),
-                  stroke_width=stroke_width + 3, stroke_fill=(0, 0, 0))
         draw.text((x, y), text, font=font, fill=fill,
                   stroke_width=stroke_width, stroke_fill=stroke_fill)
 
