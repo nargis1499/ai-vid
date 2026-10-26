@@ -22,7 +22,7 @@ class VideoAssembler:
             from moviepy.editor import (AudioFileClip, ImageClip, VideoFileClip,
                                         concatenate_videoclips, CompositeVideoClip)
             from moviepy.audio.AudioClip import CompositeAudioClip
-            from moviepy.audio.fx.all import audio_loop
+            from moviepy.audio.fx.all import audio_fadein, audio_fadeout, audio_loop
             from moviepy.config import FFMPEG_BINARY
         except Exception as exc:
             details = str(exc)
@@ -137,6 +137,15 @@ class VideoAssembler:
                 self.last_music_error = str(exc)
                 print(f"[music] Could not add background music; continuing with narration only: {exc}")
 
+            # Finish with a polished fade from black and fade to black, plus matching audio fades.
+            fade_in = min(1.1, final.duration / 3.0)
+            fade_out = min(1.6, final.duration / 3.0)
+            final = final.fadein(fade_in).fadeout(fade_out)
+            if final.audio is not None:
+                faded_audio = audio_fadein(final.audio, min(0.8, final.duration / 3.0))
+                faded_audio = audio_fadeout(faded_audio, fade_out)
+                final = final.set_audio(faded_audio)
+
             path = DIRS["videos"] / f"{video_id}.mp4"
             final.write_videofile(str(path), fps=30, codec="libx264", audio_codec="aac",
                                   preset="medium", threads=4, logger=moviepy_logger)
@@ -168,7 +177,7 @@ class VideoAssembler:
         from moviepy.editor import ImageClip
 
         frame_w, frame_h = int(frame_size[0]), int(frame_size[1])
-        font = cls._subtitle_font(ImageFont, max(28, int(frame_h * 0.052)))
+        font = cls._subtitle_font(ImageFont, max(32, int(frame_h * 0.058)))
         cue_clips = []
         entries = []
         cursor = 0.0
@@ -221,10 +230,12 @@ class VideoAssembler:
     @staticmethod
     def _subtitle_font(ImageFont, size):
         for path in (
+            r"C:\Windows\Fonts\arialbd.ttf",
+            r"C:\Windows\Fonts\segoeuib.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/Library/Fonts/Arial Bold.ttf",
             r"C:\Windows\Fonts\arial.ttf",
-            r"C:\Windows\Fonts\segoeui.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/Library/Fonts/Arial.ttf",
         ):
             if Path(path).is_file():
                 try:
@@ -235,14 +246,14 @@ class VideoAssembler:
 
     @staticmethod
     def _caption_image(text, Image, ImageDraw, ImageFont, font, frame_w):
-        max_line_width = int(frame_w * 0.86)
+        max_line_width = int(frame_w * 0.90)
         helper = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
         measure = ImageDraw.Draw(helper)
         lines = []
         line = ""
         for word in str(text).split():
             candidate = f"{line} {word}".strip()
-            if line and measure.textbbox((0, 0), candidate, font=font, stroke_width=1)[2] > max_line_width:
+            if line and measure.textbbox((0, 0), candidate, font=font, stroke_width=3)[2] > max_line_width:
                 lines.append(line)
                 line = word
             else:
@@ -250,23 +261,31 @@ class VideoAssembler:
         if line:
             lines.append(line)
         lines = lines[:2]
-        padding_x, padding_y, gap = 22, 12, 3
-        line_boxes = [measure.textbbox((0, 0), line, font=font, stroke_width=1) for line in lines]
+        padding_x, padding_y, gap = 18, 16, 8
+        line_boxes = [measure.textbbox((0, 0), line, font=font, stroke_width=3) for line in lines]
         text_w = max((box[2] - box[0] for box in line_boxes), default=1)
-        text_h = sum((box[3] - box[1]) for box in line_boxes) + gap * max(0, len(lines) - 1)
-        width = min(frame_w, text_w + padding_x * 2)
-        height = text_h + padding_y * 2
+        text_h = sum(box[3] - box[1] for box in line_boxes) + gap * max(0, len(lines) - 1)
+        width = min(frame_w, text_w + padding_x * 2 + 8)
+        height = text_h + padding_y * 2 + 8
         image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(image)
-        draw.rounded_rectangle((0, 0, width - 1, height - 1), radius=12,
-                               fill=(6, 8, 13, 190), outline=(255, 255, 255, 50), width=1)
+        shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        shadow_draw = ImageDraw.Draw(shadow)
         y = padding_y
+        positions = []
         for line, box in zip(lines, line_boxes):
             line_h = box[3] - box[1]
             line_w = box[2] - box[0]
-            draw.text(((width - line_w) / 2, y - box[1]), line, font=font,
-                      fill=(255, 255, 255, 255), stroke_width=1, stroke_fill=(0, 0, 0, 255))
+            position = ((width - line_w) / 2, y - box[1])
+            positions.append((line, position))
+            shadow_draw.text((position[0] + 2, position[1] + 3), line, font=font,
+                             fill=(0, 0, 0, 225), stroke_width=5, stroke_fill=(0, 0, 0, 235))
             y += line_h + gap
+        from PIL import ImageFilter
+        image.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(radius=2.4)))
+        draw = ImageDraw.Draw(image)
+        for line, position in positions:
+            draw.text(position, line, font=font, fill=(255, 255, 255, 255),
+                      stroke_width=3, stroke_fill=(5, 7, 12, 255))
         return image
 
     @staticmethod
