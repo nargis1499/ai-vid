@@ -54,6 +54,9 @@ def _gpu_status():
     status=orchestrator.local.gpu_status()
     if status.get("in_use"):
         return status
+    if getattr(orchestrator.assembler,"encoding_active",False) and getattr(orchestrator.assembler,"last_video_encoder",None)=="NVIDIA NVENC":
+        status.update(available=True,state="active",in_use=True,device="NVIDIA GPU",operation="NVENC video encoding",message="Encoding video with NVIDIA NVENC.")
+        return status
     if env_bool("USE_OLLAMA",True):
         base_url=os.getenv("OLLAMA_URL","http://localhost:11434").rstrip("/")
         model_name=os.getenv("OLLAMA_MODEL","qwen2.5:7b").lower()
