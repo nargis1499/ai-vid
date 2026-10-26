@@ -144,9 +144,6 @@ class AudioGenerator:
         kwargs = {}
         if os.name == "nt":
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        worker_env = os.environ.copy()
-        worker_env.pop("GEMINI_API_KEY", None)
-        worker_env["PYTHONIOENCODING"] = "utf-8"
         try:
             worker = subprocess.Popen(
                 [interpreter, str(worker_script)],
@@ -156,7 +153,7 @@ class AudioGenerator:
                 text=True,
                 encoding="utf-8",
                 bufsize=1,
-                env=worker_env,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
                 **kwargs,
             )
         except (OSError, ValueError) as exc:
