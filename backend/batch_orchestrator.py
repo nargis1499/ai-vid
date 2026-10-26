@@ -97,6 +97,7 @@ class BatchOrchestrator:
         report=lambda pct,stage,message,step_updates=None:self._update_video_progress(batch_id,index,pct,stage,message,step_updates)
         model_name=getattr(self.scripts,"model","local AI model")
         if custom_script is not None:script_message=f"Submitting your draft to Ollama {model_name} for analysis and rewrite…"
+        elif getattr(self.scripts,"provider","ollama")=="openrouter":script_message=f"Drafting with OpenRouter {getattr(self.scripts,'openrouter_model','free model')}, then asking Ollama {model_name} to review and finalize…"
         elif self.scripts.enabled:script_message=f"Asking Ollama {model_name} to write narration and plan scenes…"
         else:script_message="Creating narration and scene plan from the built-in template…"
         report(1,"script",script_message)

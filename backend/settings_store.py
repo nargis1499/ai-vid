@@ -1,4 +1,4 @@
-"""Persistent, per-user desktop settings (secrets never live in the repo)."""
+"""Persistent per-user app settings (secrets never live in the repository)."""
 import json
 import os
 import sys
@@ -18,6 +18,9 @@ SETTINGS_FILE = APP_DATA_DIR / "settings.json"
 DEFAULTS = {
     "USE_OLLAMA": True,
     "OLLAMA_MODEL": "qwen2.5:7b",
+    "SCRIPT_PROVIDER": "ollama",
+    "OPENROUTER_API_KEY": "",
+    "OPENROUTER_MODEL": "",
     "OLLAMA_URL": "http://localhost:11434",
     "OLLAMA_EXECUTABLE": "",
     "OLLAMA_AUTO_START": True,
@@ -38,7 +41,7 @@ DEFAULTS = {
     "OUTPUT_DIR": "",
 }
 BOOL_KEYS = {"USE_OLLAMA", "OLLAMA_AUTO_START", "OLLAMA_KEEP_ALIVE", "USE_LOCAL_IMAGES", "USE_LOCAL_VIDEO", "USE_NVENC"}
-PUBLIC_KEYS = set(DEFAULTS) - {"PEXELS_API_KEY"}
+PUBLIC_KEYS = set(DEFAULTS) - {"PEXELS_API_KEY", "OPENROUTER_API_KEY"}
 
 
 def load_settings():
@@ -69,10 +72,20 @@ def save_settings(updates):
             current[key] = value is True or str(value).strip().lower() in {"true", "1", "yes", "on"}
         elif key in {"MAX_UPLOADS_PER_DAY", "BATCH_DELAY_SECONDS", "GPU_MEMORY_LIMIT_GB"}:
             current[key] = int(value)
-        elif key == "PEXELS_API_KEY":
+        elif key in {"PEXELS_API_KEY", "OPENROUTER_API_KEY"}:
             current[key] = str(value or "").strip()
         else:
             current[key] = str(value).strip()
+    if current["SCRIPT_PROVIDER"] not in {"ollama", "openrouter"}:
+        raise ValueError("Script provider must be Ollama or OpenRouter.")
+    if current["SCRIPT_PROVIDER"] == "openrouter":
+        model = current["OPENROUTER_MODEL"].strip()
+        if not current["OPENROUTER_API_KEY"].strip():
+            raise ValueError("Add your OpenRouter API key before selecting OpenRouter script drafting.")
+        if not (model.endswith(":free") or model == "openrouter/free"):
+            raise ValueError("Choose a free OpenRouter model from the model list.")
+        if not current["USE_OLLAMA"]:
+            raise ValueError("Enable Ollama: OpenRouter drafts are always reviewed and finalized locally.")
     if current["TTS_ENGINE"] not in {"chatterbox", "edge"}:
         raise ValueError("Narration voice engine must be Chatterbox or Edge TTS.")
     if current["YOUTUBE_PRIVACY_STATUS"] not in {"private", "unlisted", "public"}:
@@ -113,6 +126,7 @@ def public_settings(settings=None):
     settings = settings or load_settings()
     result = {key: settings[key] for key in PUBLIC_KEYS}
     result["PEXELS_API_KEY_CONFIGURED"] = bool(settings.get("PEXELS_API_KEY"))
+    result["OPENROUTER_API_KEY_CONFIGURED"] = bool(settings.get("OPENROUTER_API_KEY"))
     result["YOUTUBE_CREDENTIALS_CONFIGURED"] = (APP_DATA_DIR / "client_secret.json").is_file() or (Path(__file__).resolve().parent / "client_secret.json").is_file()
     return result
 
