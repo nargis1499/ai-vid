@@ -191,11 +191,9 @@ class BatchOrchestrator:
         base=self._title_video_stem(title);self.sequence+=1;serial=self.sequence
         result={"title":title,"success":False,"steps":steps,"video_path":None,"subtitle_path":None,"youtube_url":None,"seo":None,"error":None}
         report=lambda pct,stage,message,step_updates=None:self._update_video_progress(batch_id,index,pct,stage,message,step_updates)
-        model_name=getattr(self.scripts,"model","local AI model")
-        if custom_script is not None:script_message=f"Submitting your draft to Ollama {model_name} for analysis and rewrite…"
-        elif getattr(self.scripts,"provider","ollama")=="openrouter":script_message=f"Drafting with OpenRouter {getattr(self.scripts,'openrouter_model','free model')}, then asking Ollama {model_name} to review and finalize…"
-        elif self.scripts.enabled:script_message=f"Asking Ollama {model_name} to write narration and plan scenes…"
-        else:script_message="Creating narration and scene plan from the built-in template…"
+        model_name=getattr(self.scripts,"openrouter_model","") or "selected model"
+        if custom_script is not None:script_message=f"Sending your draft to OpenRouter {model_name} for editing and scene planning…"
+        else:script_message=f"Asking OpenRouter {model_name} to write and review the narration and scene plan…"
         report(1,"script",script_message)
         try:
             self._check_cancel(batch_id)

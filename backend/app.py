@@ -75,15 +75,12 @@ def _apply_runtime_settings(settings):
     common.DIRS.clear()
     common.DIRS.update({name: output_dir/name for name in ("images", "audio", "videos", "clips", "thumbnails", "local_ai", "uploads", "batch")})
     for directory in common.DIRS.values(): directory.mkdir(parents=True, exist_ok=True)
-    orchestrator.scripts.enabled=env_bool("USE_OLLAMA", True)
-    orchestrator.scripts.url=os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
-    orchestrator.scripts.model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
-    orchestrator.scripts.provider=os.getenv("SCRIPT_PROVIDER", "ollama").strip().lower()
+    orchestrator.scripts.provider="openrouter"
     orchestrator.scripts.openrouter_api_key=os.getenv("OPENROUTER_API_KEY", "").strip()
     orchestrator.scripts.openrouter_model=os.getenv("OPENROUTER_MODEL", "").strip()
-    orchestrator.seo.enabled=orchestrator.scripts.enabled
-    orchestrator.seo.url=orchestrator.scripts.url
-    orchestrator.seo.model=orchestrator.scripts.model
+    orchestrator.seo.enabled=env_bool("USE_OLLAMA", True)
+    orchestrator.seo.url=os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+    orchestrator.seo.model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
     orchestrator.images.api_key=os.getenv("PEXELS_API_KEY", "").strip()
     orchestrator.images.pixabay.set_api_key(os.getenv("PIXABAY_API_KEY", "").strip())
     orchestrator.fetcher.api_key=orchestrator.images.api_key
@@ -157,7 +154,6 @@ def create_batch():
     if len(titles)>30:return jsonify({"error":"A batch can contain at most 30 titles."}),400
     custom_scripts=body.get("custom_scripts")
     if custom_scripts is not None:
-        if not env_bool("USE_OLLAMA",True):return jsonify({"error":"Custom-script review requires the local Ollama model. Enable Ollama in Settings first."}),400
         if not isinstance(custom_scripts,list) or len(custom_scripts)!=len(titles):return jsonify({"error":"Provide exactly one custom script for each video title."}),400
         custom_scripts=[str(script or "").strip() for script in custom_scripts]
         if any(not script for script in custom_scripts):return jsonify({"error":"Each custom script must contain narration text."}),400
