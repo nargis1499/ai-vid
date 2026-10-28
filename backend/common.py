@@ -21,7 +21,7 @@ else:
     OUTPUT_DIR = ROOT_DIR / "output"
 if not OUTPUT_DIR.is_absolute():
     OUTPUT_DIR = (BASE_DIR / OUTPUT_DIR).resolve()
-DIRS = {name: OUTPUT_DIR / name for name in ("images", "audio", "videos", "clips", "thumbnails", "local_ai", "uploads", "batch")}
+DIRS = {name: OUTPUT_DIR / name for name in ("images", "audio", "videos", "clips", "thumbnails", "uploads", "batch")}
 for _path in DIRS.values():
     _path.mkdir(parents=True, exist_ok=True)
 

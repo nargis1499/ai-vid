@@ -3,7 +3,6 @@ import json
 import os
 import sys
 from pathlib import Path
-from urllib.parse import urlparse
 
 APP_NAME = "CreatorFlow"
 if sys.platform == "win32":
@@ -16,19 +15,9 @@ APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 SETTINGS_FILE = APP_DATA_DIR / "settings.json"
 
 DEFAULTS = {
-    "USE_OLLAMA": True,
-    "OLLAMA_MODEL": "qwen2.5:7b",
-    "SCRIPT_PROVIDER": "openrouter",
     "OPENROUTER_API_KEY": "",
     "OPENROUTER_MODEL": "",
-    "OLLAMA_URL": "http://localhost:11434",
-    "OLLAMA_EXECUTABLE": "",
-    "OLLAMA_AUTO_START": True,
-    "OLLAMA_KEEP_ALIVE": True,
     "EDGE_TTS_VOICE": "en-US-AriaNeural",
-    "TTS_ENGINE": "chatterbox",
-    "CHATTERBOX_PYTHON": "",
-    "USE_LOCAL_IMAGES": False,
     "USE_NVENC": True,
     "PEXELS_API_KEY": "",
     "PIXABAY_API_KEY": "",
@@ -36,12 +25,12 @@ DEFAULTS = {
     "YOUTUBE_CATEGORY_ID": "22",
     "MAX_UPLOADS_PER_DAY": 5,
     "BATCH_DELAY_SECONDS": 10,
-    "GPU_MEMORY_LIMIT_GB": 7,
     "FFMPEG_BINARY": "ffmpeg-imageio",
     "OUTPUT_DIR": "",
 }
-BOOL_KEYS = {"USE_OLLAMA", "OLLAMA_AUTO_START", "OLLAMA_KEEP_ALIVE", "USE_LOCAL_IMAGES", "USE_NVENC"}
-PUBLIC_KEYS = set(DEFAULTS) - {"PEXELS_API_KEY", "PIXABAY_API_KEY", "OPENROUTER_API_KEY"}
+BOOL_KEYS = {"USE_NVENC"}
+SECRET_KEYS = {"PEXELS_API_KEY", "PIXABAY_API_KEY", "OPENROUTER_API_KEY"}
+PUBLIC_KEYS = set(DEFAULTS) - SECRET_KEYS
 
 
 def load_settings():
@@ -55,8 +44,6 @@ def load_settings():
             values.update({key: val for key, val in saved.items() if key in DEFAULTS})
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         pass
-    # Script and scene-plan generation is always handled by OpenRouter.
-    values["SCRIPT_PROVIDER"] = "openrouter"
     if not values["OUTPUT_DIR"]:
         if getattr(sys, "frozen", False):
             values["OUTPUT_DIR"] = str(APP_DATA_DIR / "output")
@@ -72,32 +59,18 @@ def save_settings(updates):
             continue
         if key in BOOL_KEYS:
             current[key] = value is True or str(value).strip().lower() in {"true", "1", "yes", "on"}
-        elif key in {"MAX_UPLOADS_PER_DAY", "BATCH_DELAY_SECONDS", "GPU_MEMORY_LIMIT_GB"}:
+        elif key in {"MAX_UPLOADS_PER_DAY", "BATCH_DELAY_SECONDS"}:
             current[key] = int(value)
-        elif key in {"PEXELS_API_KEY", "PIXABAY_API_KEY", "OPENROUTER_API_KEY"}:
+        elif key in SECRET_KEYS:
             current[key] = str(value or "").strip()
         else:
             current[key] = str(value).strip()
-    # Keep old saved settings compatible, but never route script work to a local model.
-    current["SCRIPT_PROVIDER"] = "openrouter"
-    model = current["OPENROUTER_MODEL"].strip()
-    if model and not (model.endswith(":free") or model == "openrouter/free"):
-        raise ValueError("Choose a free OpenRouter model from the model list.")
-    if current["TTS_ENGINE"] not in {"chatterbox", "edge"}:
-        raise ValueError("Narration voice engine must be Chatterbox or Edge TTS.")
     if current["YOUTUBE_PRIVACY_STATUS"] not in {"private", "unlisted", "public"}:
         raise ValueError("YouTube privacy must be private, unlisted, or public.")
-    if not current["OLLAMA_MODEL"].strip():
-        raise ValueError("Enter an Ollama model name, for example qwen2.5:7b.")
-    ollama_url=urlparse(current["OLLAMA_URL"])
-    if ollama_url.scheme not in {"http", "https"} or not ollama_url.netloc:
-        raise ValueError("Enter a valid Ollama URL, for example http://localhost:11434.")
     if not 1 <= current["MAX_UPLOADS_PER_DAY"] <= 50:
         raise ValueError("Daily upload limit must be from 1 to 50.")
     if not 0 <= current["BATCH_DELAY_SECONDS"] <= 3600:
-        raise ValueError("Batch delay must be from 0 to 3600 seconds.")
-    if not 1 <= current["GPU_MEMORY_LIMIT_GB"] <= 64:
-        raise ValueError("GPU memory limit must be from 1 to 64 GB.")
+        raise ValueError("Delay between videos must be from 0 to 3600 seconds.")
     settings_path = Path(current["OUTPUT_DIR"]).expanduser()
     settings_path.mkdir(parents=True, exist_ok=True)
     try:
@@ -114,7 +87,6 @@ def apply_environment(settings):
         if key == "OUTPUT_DIR":
             continue
         os.environ[key] = str(value).lower() if isinstance(value, bool) else str(value)
-    os.environ["SCRIPT_PROVIDER"] = "openrouter"
 
 
 def public_settings(settings=None):
@@ -130,7 +102,7 @@ def public_settings(settings=None):
 def _coerce_env(key, value):
     if key in BOOL_KEYS:
         return str(value).strip().lower() in {"true", "1", "yes", "on"}
-    if key in {"MAX_UPLOADS_PER_DAY", "BATCH_DELAY_SECONDS", "GPU_MEMORY_LIMIT_GB"}:
+    if key in {"MAX_UPLOADS_PER_DAY", "BATCH_DELAY_SECONDS"}:
         try:
             return int(value)
         except ValueError:

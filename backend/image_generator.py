@@ -1,4 +1,4 @@
-"""Pexels imagery and local PIL-based gradient fallbacks."""
+"""Pexels/Pixabay stock imagery and designed gradient fallbacks."""
 import io, random, textwrap
 from pathlib import Path
 import requests

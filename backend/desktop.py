@@ -34,9 +34,6 @@ def main():
     server_thread = threading.Thread(target=server.serve_forever, daemon=True, name="creatorflow-web")
     server_thread.start()
 
-    ollama = app.config["OLLAMA_RUNTIME"]
-    ollama.start()
-
     window = webview.create_window(
         "CreatorFlow — YouTube Video Studio",
         f"http://127.0.0.1:{server.server_port}/",
@@ -47,7 +44,6 @@ def main():
     )
 
     def shutdown():
-        ollama.shutdown()
         server.shutdown()
 
     window.events.closed += shutdown

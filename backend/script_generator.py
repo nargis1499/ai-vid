@@ -18,8 +18,6 @@ class ScriptGenerator:
             raise RuntimeError("OpenRouter is not configured. Add your API key in Settings before generating scripts.")
         if not self.openrouter_model:
             raise RuntimeError("Choose an OpenRouter text model in Settings before generating scripts.")
-        if not (self.openrouter_model.endswith(":free") or self.openrouter_model == "openrouter/free"):
-            raise RuntimeError("Choose a free OpenRouter text model in Settings before generating scripts.")
 
     def _chat(self, prompt: str, *, temperature: float, max_tokens: int, task: str) -> str:
         self._require_openrouter()
@@ -53,7 +51,7 @@ class ScriptGenerator:
             detail = str(detail or response.text or "").strip()[:500]
             raise RuntimeError(
                 f"OpenRouter returned HTTP {response.status_code} while {task}: "
-                f"{detail or 'request failed'}. Check the API key, selected free model, and account limits."
+                f"{detail or 'request failed'}. Check the API key, selected model, and account limits."
             )
         try:
             payload = response.json()
@@ -64,16 +62,16 @@ class ScriptGenerator:
                 raise ValueError("empty response")
             return str(content)
         except (ValueError, TypeError, KeyError, IndexError) as exc:
-            raise RuntimeError(f"OpenRouter did not return a usable response while {task}. Try another free text model.") from exc
+            raise RuntimeError(f"OpenRouter did not return a usable response while {task}. Try another OpenRouter text model.") from exc
 
     def generate_script(self, title: str, duration: int) -> dict:
         """Ask OpenRouter to draft, then review/finalize, the script and scene plan."""
         count = max(1, min(24, int(duration) // 10))
         candidate = self._generate_openrouter_draft(title, duration, count)
         if not isinstance(candidate.get("scenes"), list) or not candidate["scenes"]:
-            raise RuntimeError("OpenRouter returned no script scenes. Choose another free model and try again.")
+            raise RuntimeError("OpenRouter returned no script scenes. Choose another OpenRouter model and try again.")
         if not any(isinstance(scene, dict) and str(scene.get("narration") or "").strip() for scene in candidate["scenes"]):
-            raise RuntimeError("OpenRouter returned no narration text. Choose another free model and try again.")
+            raise RuntimeError("OpenRouter returned no narration text. Choose another OpenRouter model and try again.")
         source = json.dumps({
             "video_title": str(title),
             "target_duration_seconds": int(duration),
@@ -89,7 +87,7 @@ class ScriptGenerator:
             max_tokens = min(8192, max(4096, int(duration) * 8))
             return self._parse_json(self._chat(prompt, temperature=0.7, max_tokens=max_tokens, task="drafting the script and scene plan"))
         except ValueError as exc:
-            raise RuntimeError("OpenRouter did not return a usable JSON script draft. Try a different free text model.") from exc
+            raise RuntimeError("OpenRouter did not return a usable JSON script draft. Try a different OpenRouter text model.") from exc
 
     def generate_custom_script(self, title: str, custom_text: str, duration: int) -> dict:
         """Use the selected OpenRouter model to edit a custom draft and plan its scenes."""
@@ -137,7 +135,7 @@ RAW {source_label} data: {source}'''
         except (ValueError, TypeError, KeyError, IndexError) as exc:
             raise RuntimeError(
                 f"OpenRouter could not produce a valid reviewed script from this {source_label} "
-                f"({type(exc).__name__}: {exc}). Try again or choose another free text model. "
+                f"({type(exc).__name__}: {exc}). Try again or choose another OpenRouter text model. "
                 "The unreviewed draft was not used for the video."
             ) from exc
 

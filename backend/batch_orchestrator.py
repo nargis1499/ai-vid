@@ -1,12 +1,11 @@
 """Background, sequential batch controller for the complete video pipeline."""
-import gc, threading, time, uuid, os, requests, copy, re, unicodedata, traceback
+import threading, time, uuid, os, copy, re, unicodedata, traceback
 from datetime import datetime
 from common import DIRS, env_bool
 from script_generator import ScriptGenerator
 from audio_generator import AudioGenerator, NarrationCancelled
 from image_generator import ImageGenerator
 from video_fetcher import VideoFetcher
-from local_ai_generator import LocalAIGenerator
 from video_assembler import VideoAssembler
 from thumbnail_generator import ThumbnailGenerator
 from youtube_seo import YouTubeSEO
@@ -21,7 +20,7 @@ class BatchCancelled(Exception):
 
 class BatchOrchestrator:
     def __init__(self):
-        self.scripts=ScriptGenerator();self.audio=AudioGenerator();self.images=ImageGenerator();self.fetcher=VideoFetcher();self.local=LocalAIGenerator();self.assembler=VideoAssembler();self.thumbnails=ThumbnailGenerator();self.seo=YouTubeSEO();self.youtube=YouTubeUploader()
+        self.scripts=ScriptGenerator();self.audio=AudioGenerator();self.images=ImageGenerator();self.fetcher=VideoFetcher();self.assembler=VideoAssembler();self.thumbnails=ThumbnailGenerator();self.seo=YouTubeSEO();self.youtube=YouTubeUploader()
         self.batches={};self.lock=threading.RLock();self.pipeline_lock=threading.Lock();self.upload_lock=threading.Lock();self.cancel_events={};self.active_batch_id=None;self.sequence=int(time.time())
     def start_batch(self,titles:list,duration:int,niche:str,auto_upload:bool,privacy:str,custom_scripts=None,resolution="720p",voice_speed="medium",thumbnail_only=False)->str:
         batch_id=datetime.utcnow().strftime("%Y%m%dT%H%M%S")+"-"+uuid.uuid4().hex[:6]
@@ -154,7 +153,6 @@ class BatchOrchestrator:
                 self.batches[batch_id]["completed"]+=1
                 if not result.get("success"):self.batches[batch_id]["failed"]+=1
                 self.batches[batch_id]["progress"]=round(100*self.batches[batch_id]["completed"]/len(titles))
-            self._clear_gpu()
             if index<len(titles)-1 and not thumbnail_only:
                 try:
                     delay=max(0,int(__import__('os').getenv("BATCH_DELAY_SECONDS","10")))
@@ -211,18 +209,15 @@ class BatchOrchestrator:
         except Exception as exc:
             steps["script"]="failed";result["error"]=f"Script generation failed: {exc}"
             report(8,"script",result["error"],{"script":"failed"});return result
-        if env_bool("USE_LOCAL_IMAGES",False):
-            self._release_ollama_for_gpu()
         scenes=script.get("scenes",[])
         media=[None]*len(scenes)
         stock_video_count=0
-        local_images=env_bool("USE_LOCAL_IMAGES",False) and self.local.available
         thumbnail_scene_indices=set(range(len(scenes)))
         if thumbnail_only and len(scenes)>5:
             thumbnail_scene_indices={round(i*(len(scenes)-1)/4) for i in range(5)}
 
-        # Prefer a relevant stock clip, then a locally downloaded stock still; only
-        # generate a custom still when neither provider has usable stock media.
+        # Prefer relevant stock clips, followed by stock stills; use a designed
+        # gradient fallback if neither provider has usable stock media.
         for i,scene in enumerate(scenes):
             self._check_cancel(batch_id)
             pct=8+int(20*i/max(1,len(scenes)))
@@ -251,13 +246,6 @@ class BatchOrchestrator:
             if not thumbnail_only:report(pct,"images",f"No usable stock clip found; searching Pexels and Pixabay for a stock still for scene {i+1}…")
             image_path=self.images.generate_scene_image(scene,serial*100+i)
             self._check_cancel(batch_id)
-            if self.images.last_source=="Gradient" and local_images:
-                report(pct,"images",f"No usable stock image found; creating a local SDXL fallback for scene {i+1}…")
-                generated=self.local.generate_image(scene.get("visual_description",title),serial*100+i)
-                self._check_cancel(batch_id)
-                if generated:
-                    image_path=generated
-                    self.images.last_source="SDXL"
             media[i]={"type":"image","path":image_path}
             provider=self.images.last_source or "fallback"
             report(8+int(20*(i+1)/max(1,len(scenes))),"images",f"Prepared {provider} still visual for scene {i+1} of {len(scenes)}")
@@ -288,13 +276,13 @@ class BatchOrchestrator:
         if thumbnail_only:
             skipped_updates={key:"skipped" for key in ("audio","assembly","subtitles","music","encoding","upload")}
             for key,state in skipped_updates.items():steps[key]=state
-            seo_message=f"Asking Ollama {getattr(self.seo,'model','local model')} to prepare thumbnail wording (built-in fallback available)…" if self.seo.enabled else "Preparing thumbnail wording with the built-in SEO template…"
+            seo_message=f"Asking OpenRouter {self.seo.model or 'text model'} to prepare thumbnail wording…"
             report(50,"seo",seo_message+" Video rendering is disabled for this batch.",skipped_updates)
             try:
                 seo=self.seo.generate_seo_package(title,script,niche)
                 self._check_cancel(batch_id)
                 result["seo"]=seo;steps["seo"]="done"
-                report(70,"seo","Thumbnail text and scene labels ready",{"seo":"done"})
+                report(70,"seo",f"Thumbnail text and scene labels ready · {self.seo.last_source}",{"seo":"done"})
             except BatchCancelled:
                 raise
             except Exception as exc:
@@ -316,36 +304,26 @@ class BatchOrchestrator:
                 report(95,"thumbnail",result["error"],{"thumbnail":"failed"});return result
             return result
         audio_paths=[]
-        if self.audio.voice_engine == "chatterbox":
-            # Ollama may otherwise occupy most of an 8 GB GPU while Chatterbox loads.
-            self._release_ollama_for_gpu()
-        try:
-            for i,scene in enumerate(scenes):
+        for i,scene in enumerate(scenes):
+            self._check_cancel(batch_id)
+            pct=45+int(15*i/max(1,len(scenes)))
+            pace_label={"slower":"Slower","slow":"Slow","medium":"Medium","faster":"Faster"}[voice_speed]
+            report(pct,"audio",f"Generating narration {i+1} of {len(scenes)} with hosted Edge TTS · {pace_label} pace…")
+            try:
+                audio_path=self.audio.generate(scene.get("narration",title),serial*100+i,speed=voice_speed,cancel_check=lambda:self._check_cancel(batch_id))
                 self._check_cancel(batch_id)
-                pct=45+int(15*i/max(1,len(scenes)))
-                engine_label="local Chatterbox (Edge TTS fallback available)" if self.audio.voice_engine == "chatterbox" else "Edge TTS (offline voice fallback available)"
-                pace_label={"slower":"Slower","slow":"Slow","medium":"Medium","faster":"Faster"}[voice_speed]
-                report(pct,"audio",f"Generating narration {i+1} of {len(scenes)} with {engine_label} · {pace_label} pace…")
-                try:
-                    audio_path=self.audio.generate(scene.get("narration",title),serial*100+i,speed=voice_speed,cancel_check=lambda:self._check_cancel(batch_id))
-                    self._check_cancel(batch_id)
-                    if not os.path.isfile(audio_path) or os.path.getsize(audio_path)==0:
-                        raise RuntimeError("Narration output is missing or empty.")
-                    audio_paths.append(audio_path)
-                    if self.audio.last_warning and not result.get("voice_warning"):
-                        result["voice_warning"]=self.audio.last_warning
-                        result["voice_fallback_engine"]=self.audio.last_engine
-                    report(45+int(15*(i+1)/max(1,len(scenes))),"audio",f"Narration audio {i+1} of {len(scenes)} ready with {self.audio.last_engine} at {pace_label} pace")
-                except NarrationCancelled:
-                    raise BatchCancelled("Generation stopped by user.")
-                except Exception as exc:
-                    if self._is_cancelled(batch_id):
-                        raise BatchCancelled("Generation stopped by user.") from exc
-                    steps["audio"]="failed"
-                    result["error"]=f"Voiceover generation failed in scene {i+1}: {exc}"
-                    report(pct,"audio",result["error"],{"audio":"failed"});return result
-        finally:
-            self.audio.release_chatterbox_model()
+                if not os.path.isfile(audio_path) or os.path.getsize(audio_path)==0:
+                    raise RuntimeError("Narration output is missing or empty.")
+                audio_paths.append(audio_path)
+                report(45+int(15*(i+1)/max(1,len(scenes))),"audio",f"Narration audio {i+1} of {len(scenes)} ready with {self.audio.last_engine} at {pace_label} pace")
+            except NarrationCancelled:
+                raise BatchCancelled("Generation stopped by user.")
+            except Exception as exc:
+                if self._is_cancelled(batch_id):
+                    raise BatchCancelled("Generation stopped by user.") from exc
+                steps["audio"]="failed"
+                result["error"]=f"Voiceover generation failed in scene {i+1}: {exc}"
+                report(pct,"audio",result["error"],{"audio":"failed"});return result
         self._check_cancel(batch_id)
         steps["audio"]="done" if audio_paths else "failed"
         report(60,"audio",f"Narration ready for {len(audio_paths)} scene(s)",{"audio":steps["audio"]})
@@ -376,13 +354,13 @@ class BatchOrchestrator:
             steps[failed_step]="failed"
             report(82,failed_step,result["error"],{failed_step:"failed"});return result
         self._check_cancel(batch_id)
-        seo_message=f"Asking Ollama {getattr(self.seo,'model','local model')} to prepare title, description and tags (built-in fallback available)…" if self.seo.enabled else "Preparing YouTube metadata with the built-in SEO template…"
+        seo_message=f"Asking OpenRouter {self.seo.model or 'text model'} to prepare title, description and tags…"
         report(83,"seo",seo_message)
         try:
             seo=self.seo.generate_seo_package(title,script,niche)
             self._check_cancel(batch_id)
             result["seo"]=seo;steps["seo"]="done"
-            report(87,"seo","YouTube title, description and tags ready",{"seo":"done"})
+            report(87,"seo",f"YouTube metadata ready · {self.seo.last_source}",{"seo":"done"})
         except BatchCancelled:
             raise
         except Exception as exc:
@@ -495,22 +473,3 @@ class BatchOrchestrator:
                     video.update(upload_status="failed",upload_error=error,upload_message=error)
                     video.setdefault("steps",{})["upload"]="failed"
                     video.setdefault("step_messages",{})["upload"]=error
-
-    @staticmethod
-    def _release_ollama_for_gpu():
-        """Unload the selected LLM before loading diffusion models onto the same GPU."""
-        if not env_bool("USE_OLLAMA",True):return
-        model=os.getenv("OLLAMA_MODEL","qwen2.5:7b")
-        url=os.getenv("OLLAMA_URL","http://localhost:11434").rstrip("/")
-        try:
-            requests.post(url+"/api/generate",json={"model":model,"prompt":"","stream":False,"keep_alive":0,"options":{"num_predict":0}},timeout=8)
-        except requests.RequestException as exc:
-            print(f"[gpu] Could not request Ollama model unload before diffusion step: {exc}")
-
-    @staticmethod
-    def _clear_gpu():
-        try:
-            import torch
-            if torch.cuda.is_available():torch.cuda.empty_cache()
-        except Exception:pass
-        gc.collect()
