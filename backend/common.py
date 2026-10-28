@@ -24,6 +24,3 @@ if not OUTPUT_DIR.is_absolute():
 DIRS = {name: OUTPUT_DIR / name for name in ("images", "audio", "videos", "clips", "thumbnails", "uploads", "batch")}
 for _path in DIRS.values():
     _path.mkdir(parents=True, exist_ok=True)
-
-def env_bool(key, default=False):
-    return os.getenv(key, str(default)).strip().lower() in {"1", "true", "yes", "on"}

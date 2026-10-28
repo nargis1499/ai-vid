@@ -1,7 +1,7 @@
 """Background, sequential batch controller for the complete video pipeline."""
 import threading, time, uuid, os, copy, re, unicodedata, traceback
 from datetime import datetime
-from common import DIRS, env_bool
+from common import DIRS
 from script_generator import ScriptGenerator
 from audio_generator import AudioGenerator, NarrationCancelled
 from image_generator import ImageGenerator
@@ -81,7 +81,7 @@ class BatchOrchestrator:
             video.update(progress=progress,current_stage=stage,progress_message=message,steps=steps,step_messages=messages)
             batch["progress"]=round(100*(batch["completed"]+progress/100)/max(1,batch["total"]))
     def _process_batch(self,batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts=None,resolution="720p",voice_speed="medium",thumbnail_only=False):
-        # Serialize independent batches too: never overlap GPU model loads or media assembly.
+        # Serialize independent batches too: avoid overlapping CPU-heavy media pipelines.
         try:
             with self.pipeline_lock:
                 with self.lock:
@@ -337,7 +337,7 @@ class BatchOrchestrator:
                 report(assembly_percent[0],"encoding",f"Encoding MP4 with {encoder}… {int(100*max(0,min(1,fraction)))}%")
             def assembly_stage(stage,message):
                 report(assembly_percent[0],stage,message)
-            video_path=self.assembler.create(script,media,audio_paths,base,progress_callback=assembly_progress,video_title=title,resolution=resolution,use_nvenc=env_bool("USE_NVENC",True),stage_callback=assembly_stage,cancel_check=lambda:self._check_cancel(batch_id));result["video_path"]=video_path
+            video_path=self.assembler.create(script,media,audio_paths,base,progress_callback=assembly_progress,video_title=title,resolution=resolution,stage_callback=assembly_stage,cancel_check=lambda:self._check_cancel(batch_id));result["video_path"]=video_path
             result["video_encoder"]=self.assembler.last_video_encoder
             subtitle_path=os.path.splitext(video_path)[0]+".srt"
             result["subtitle_path"]=subtitle_path if os.path.isfile(subtitle_path) else None

@@ -18,7 +18,6 @@ DEFAULTS = {
     "OPENROUTER_API_KEY": "",
     "OPENROUTER_MODEL": "",
     "EDGE_TTS_VOICE": "en-US-AriaNeural",
-    "USE_NVENC": True,
     "PEXELS_API_KEY": "",
     "PIXABAY_API_KEY": "",
     "YOUTUBE_PRIVACY_STATUS": "private",
@@ -28,7 +27,6 @@ DEFAULTS = {
     "FFMPEG_BINARY": "ffmpeg-imageio",
     "OUTPUT_DIR": "",
 }
-BOOL_KEYS = {"USE_NVENC"}
 SECRET_KEYS = {"PEXELS_API_KEY", "PIXABAY_API_KEY", "OPENROUTER_API_KEY"}
 PUBLIC_KEYS = set(DEFAULTS) - SECRET_KEYS
 
@@ -57,9 +55,7 @@ def save_settings(updates):
     for key, value in updates.items():
         if key not in DEFAULTS:
             continue
-        if key in BOOL_KEYS:
-            current[key] = value is True or str(value).strip().lower() in {"true", "1", "yes", "on"}
-        elif key in {"MAX_UPLOADS_PER_DAY", "BATCH_DELAY_SECONDS"}:
+        if key in {"MAX_UPLOADS_PER_DAY", "BATCH_DELAY_SECONDS"}:
             current[key] = int(value)
         elif key in SECRET_KEYS:
             current[key] = str(value or "").strip()
@@ -100,8 +96,6 @@ def public_settings(settings=None):
 
 
 def _coerce_env(key, value):
-    if key in BOOL_KEYS:
-        return str(value).strip().lower() in {"true", "1", "yes", "on"}
     if key in {"MAX_UPLOADS_PER_DAY", "BATCH_DELAY_SECONDS"}:
         try:
             return int(value)

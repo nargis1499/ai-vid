@@ -69,8 +69,7 @@
           <p class="field-hint">Narration requires an internet connection. If hosted TTS is unavailable, generation stops with an error rather than switching to a local voice model.</p>
         </section>
 
-        <section class="settings-section"><div class="settings-section-title"><span class="settings-section-icon amber"><i class="fa-solid fa-microchip"></i></span><div><b>Video encoding</b><small>Choose the preferred encoder for final MP4 exports.</small></div></div>
-          <label class="settings-toggle"><span><b>Prefer NVIDIA NVENC</b><small>Use the GPU's dedicated H.264 encoder when available. Automatically falls back to CPU encoding if NVENC is unsupported or fails.</small></span><span class="switch"><input type="checkbox" id="setting-use-nvenc"><span class="slider"></span></span></label>
+        <section class="settings-section"><div class="settings-section-title"><span class="settings-section-icon amber"><i class="fa-solid fa-microchip"></i></span><div><b>CPU video encoding</b><small>Final MP4s are encoded with the CPU-based H.264 libx264 encoder. No GPU encoder is used.</small></div></div>
         </section>
         <section class="settings-section"><div class="settings-section-title"><span class="settings-section-icon coral"><i class="fa-brands fa-youtube"></i></span><div><b>YouTube &amp; batch</b><small>Credentials stay in your local application data folder.</small></div></div>
           <div class="settings-grid"><label>Default privacy<select id="setting-privacy"><option value="private">Private</option><option value="unlisted">Unlisted</option><option value="public">Public</option></select></label><label>YouTube category ID<input id="setting-category" type="text" inputmode="numeric"></label><label>Upload limit per day<input id="setting-upload-limit" type="number" min="1" max="50"></label><label>Delay between videos (seconds)<input id="setting-batch-delay" type="number" min="0" max="3600"></label></div>
