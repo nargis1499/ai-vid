@@ -15,8 +15,10 @@ APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 SETTINGS_FILE = APP_DATA_DIR / "settings.json"
 
 DEFAULTS = {
+    "TEXT_PROVIDER": "openrouter",
+    "TEXT_MODEL": "",
     "OPENROUTER_API_KEY": "",
-    "OPENROUTER_MODEL": "",
+    "GROK_API_KEY": "",
     "EDGE_TTS_VOICE": "en-US-AriaNeural",
     "PEXELS_API_KEY": "",
     "PIXABAY_API_KEY": "",
@@ -27,7 +29,7 @@ DEFAULTS = {
     "FFMPEG_BINARY": "ffmpeg-imageio",
     "OUTPUT_DIR": "",
 }
-SECRET_KEYS = {"PEXELS_API_KEY", "PIXABAY_API_KEY", "OPENROUTER_API_KEY"}
+SECRET_KEYS = {"PEXELS_API_KEY", "PIXABAY_API_KEY", "OPENROUTER_API_KEY", "GROK_API_KEY"}
 PUBLIC_KEYS = set(DEFAULTS) - SECRET_KEYS
 
 
@@ -40,8 +42,13 @@ def load_settings():
         saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
         if isinstance(saved, dict):
             values.update({key: val for key, val in saved.items() if key in DEFAULTS})
+            if not values["TEXT_MODEL"]:
+                values["TEXT_MODEL"] = str(saved.get("OPENROUTER_MODEL") or os.getenv("OPENROUTER_MODEL", "")).strip()
     except (FileNotFoundError, json.JSONDecodeError, OSError):
-        pass
+        if not values["TEXT_MODEL"]:
+            values["TEXT_MODEL"] = os.getenv("OPENROUTER_MODEL", "").strip()
+    if values["TEXT_PROVIDER"] not in {"openrouter", "grok"}:
+        values["TEXT_PROVIDER"] = "openrouter"
     if not values["OUTPUT_DIR"]:
         if getattr(sys, "frozen", False):
             values["OUTPUT_DIR"] = str(APP_DATA_DIR / "output")
@@ -55,12 +62,16 @@ def save_settings(updates):
     for key, value in updates.items():
         if key not in DEFAULTS:
             continue
-        if key in {"MAX_UPLOADS_PER_DAY", "BATCH_DELAY_SECONDS"}:
+        if key == "TEXT_PROVIDER":
+            current[key] = str(value or "openrouter").strip().lower()
+        elif key in {"MAX_UPLOADS_PER_DAY", "BATCH_DELAY_SECONDS"}:
             current[key] = int(value)
         elif key in SECRET_KEYS:
             current[key] = str(value or "").strip()
         else:
             current[key] = str(value).strip()
+    if current["TEXT_PROVIDER"] not in {"openrouter", "grok"}:
+        raise ValueError("Text provider must be OpenRouter or Grok.")
     if current["YOUTUBE_PRIVACY_STATUS"] not in {"private", "unlisted", "public"}:
         raise ValueError("YouTube privacy must be private, unlisted, or public.")
     if not 1 <= current["MAX_UPLOADS_PER_DAY"] <= 50:
@@ -91,6 +102,7 @@ def public_settings(settings=None):
     result["PEXELS_API_KEY_CONFIGURED"] = bool(settings.get("PEXELS_API_KEY"))
     result["PIXABAY_API_KEY_CONFIGURED"] = bool(settings.get("PIXABAY_API_KEY"))
     result["OPENROUTER_API_KEY_CONFIGURED"] = bool(settings.get("OPENROUTER_API_KEY"))
+    result["GROK_API_KEY_CONFIGURED"] = bool(settings.get("GROK_API_KEY"))
     result["YOUTUBE_CREDENTIALS_CONFIGURED"] = (APP_DATA_DIR / "client_secret.json").is_file() or (Path(__file__).resolve().parent / "client_secret.json").is_file()
     return result
 
