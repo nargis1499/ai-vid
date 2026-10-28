@@ -130,6 +130,13 @@ def stop_batch(batch_id):
     stopped,message=orchestrator.request_stop(batch_id)
     return (jsonify({"success":True,"message":message}),202) if stopped else (jsonify({"error":message}),409)
 
+@app.post("/api/batch/<batch_id>/retry/<int:index>/<step>")
+def retry_batch_step(batch_id,index,step):
+    if step=="upload" and not orchestrator.youtube.status().get("connected"):
+        return jsonify({"error":"Connect your YouTube channel before retrying the upload step."}),409
+    started,message=orchestrator.retry_failed_step(batch_id,index,step)
+    return (jsonify({"success":True,"message":message}),202) if started else (jsonify({"error":message}),409)
+
 @app.post("/api/batch/<batch_id>/publish/<int:index>")
 def publish_video(batch_id,index):
     youtube_status=orchestrator.youtube.status()

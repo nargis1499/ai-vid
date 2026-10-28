@@ -14,9 +14,9 @@ const VIDEO_STEPS=[
  {key:'finalize',label:'Finish & prepare downloads',hint:'Make the video, thumbnail, and subtitle files available.'}
 ];
 function toast(message){const el=$('#toast');el.textContent=message;el.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),3500)}
-function stepDetailsMarkup(){return `<details class="step-details"><summary><span><i class="fa-solid fa-list-check"></i> Step-by-step progress</span><span class="step-count">0/${VIDEO_STEPS.length}</span></summary><ol class="step-list">${VIDEO_STEPS.map((step,index)=>`<li class="step-item" data-step="${step.key}"><span class="step-marker">${String(index+1).padStart(2,'0')}</span><div class="step-copy"><b>${step.label}</b><small class="step-message">Waiting to start</small><span class="step-mini-track"><i></i></span></div><span class="step-status">WAITING</span></li>`).join('')}</ol></details>`}
+function stepDetailsMarkup(){return `<details class="step-details"><summary><span><i class="fa-solid fa-list-check"></i> Step-by-step progress</span><span class="step-count">0/${VIDEO_STEPS.length}</span></summary><ol class="step-list">${VIDEO_STEPS.map((step,index)=>`<li class="step-item" data-step="${step.key}"><span class="step-marker">${String(index+1).padStart(2,'0')}</span><div class="step-copy"><b>${step.label}</b><small class="step-message">Waiting to start</small><span class="step-mini-track"><i></i></span></div><span class="step-status">WAITING</span><button class="step-retry-button" type="button" data-retry-step="${step.key}" hidden><i class="fa-solid fa-rotate-right"></i> Retry</button></li>`).join('')}</ol></details>`}
 function makeVideoRow(title,index){return `<div class="video-row" data-index="${index}"><span class="video-number">${String(index+1).padStart(2,'0')}</span><div class="video-row-main"><b>${escapeHtml(title)}</b><small class="video-progress-message">Queued</small><div class="video-progress-track"><div class="video-progress-fill"></div></div>${stepDetailsMarkup()}</div><span class="row-state">WAITING</span></div>`}
-function updateStepDetails(row,video){
+function updateStepDetails(row,video,batchStatus){
  const details=row.querySelector('.step-details');
  if(!details)return;
  const steps=video.steps||{};
@@ -36,6 +36,11 @@ function updateStepDetails(row,video){
   item.className=`step-item state-${state}${video.current_stage===definition.key&&state==='running'?' is-current':''}${measured?' has-measured-progress':''}`;
   item.querySelector('.step-message').textContent=message;
   item.querySelector('.step-status').textContent=({pending:'WAITING',running:'IN PROGRESS',done:'DONE',fallback:'FALLBACK',skipped:'SKIPPED',failed:'FAILED'})[state]||String(state).toUpperCase();
+  const retryButton=item.querySelector('.step-retry-button');
+  retryButton.innerHTML='<i class="fa-solid fa-rotate-right"></i> Retry';
+  const batchBusy=['queued','running','stopping'].includes(batchStatus);
+  retryButton.hidden=state!=='failed'||video.status==='processing'||batchBusy;
+  retryButton.disabled=video.status==='processing'||batchBusy;
   let amount=completeStates.has(state)||state==='failed'?100:0;
   if(state==='running')amount=percentMatch?Math.max(0,Math.min(100,Number(percentMatch[1]))):itemMatch?Math.round(100*Number(itemMatch[1])/Math.max(1,Number(itemMatch[2]))):28;
   item.querySelector('.step-mini-track i').style.width=`${amount}%`;
@@ -87,6 +92,13 @@ async function stopBatch(){
  try{const response=await fetch(`/api/batch/${encodeURIComponent(activeBatch)}/stop`,{method:'POST'});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not stop the batch');$('#progress-message').textContent=data.message||'Stop requested…';if(!pollTimer)pollTimer=setInterval(pollBatch,1500);await pollBatch()}catch(error){toast(error.message||'Could not stop generation');button.disabled=false;button.innerHTML='<i class="fa-solid fa-stop"></i> Stop generation'}
 }
 async function handleVideoAction(event){
+ const retryButton=event.target.closest('.step-retry-button');
+ if(retryButton){
+  const row=retryButton.closest('.video-row'),index=Number(row.dataset.index),step=retryButton.dataset.retryStep;
+  retryButton.disabled=true;retryButton.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Retrying…';
+  try{const response=await fetch(`/api/batch/${encodeURIComponent(activeBatch)}/retry/${index}/${encodeURIComponent(step)}`,{method:'POST'});const data=await response.json();if(!response.ok)throw new Error(data.error||`Could not retry ${step}`);toast(data.message||`Retrying ${step}…`);if(!pollTimer)pollTimer=setInterval(pollBatch,1500);await pollBatch()}catch(error){retryButton.disabled=false;retryButton.innerHTML='<i class="fa-solid fa-rotate-right"></i> Retry';toast(error.message||`Could not retry ${step}`)}
+  return
+ }
  const button=event.target.closest('.publish-button');if(!button)return;
  const index=Number(button.dataset.index);button.disabled=true;button.textContent='Starting publish…';
  try{const response=await fetch(`/api/batch/${encodeURIComponent(activeBatch)}/publish/${index}`,{method:'POST'});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not publish video');toast('YouTube publishing started.');if(!pollTimer)pollTimer=setInterval(pollBatch,1500);await pollBatch()}catch(error){button.disabled=false;button.textContent='Publish to YouTube';toast(error.message||'Could not publish video')}
@@ -125,7 +137,7 @@ async function pollBatch(){
    const badge=row.querySelector('.row-state');
    badge.className=`row-state ${state}`;
    badge.textContent=state.toUpperCase();
-   updateStepDetails(row,video);
+   updateStepDetails(row,video,data.status);
    if(video.script&&Array.isArray(video.script.scenes)&&!row.querySelector('.script-preview')){
     const details=document.createElement('details');
     details.className='script-preview';
