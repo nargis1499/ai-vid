@@ -12,70 +12,51 @@ class VideoAssembler:
 
     def __init__(self):
         self.last_video_encoder = None
-        self.encoding_active = False
-        self._nvenc_unavailable_binary = None
 
-    def _encode_video(self, final, path, ffmpeg_binary, allow_nvenc, logger, stage_callback=None, cancel_check=None):
+    def _encode_video(self, final, path, logger, stage_callback=None, cancel_check=None):
         path = Path(path)
-        ffmpeg_key = str(ffmpeg_binary)
-        use_nvenc = allow_nvenc and self._nvenc_unavailable_binary != ffmpeg_key
-        attempts = []
-        if use_nvenc:
-            attempts.append(("NVIDIA NVENC", "h264_nvenc", "p5",
-                             ["-rc", "vbr", "-cq", "19", "-b:v", "0"],
-                             path.with_name(f"{path.stem}.nvenc-temp.mp4"),
-                             path.with_name(f"{path.stem}.nvenc-audio.m4a")))
-        attempts.append(("CPU libx264", "libx264", "medium", [],
-                         path.with_name(f"{path.stem}.x264-temp.mp4"),
-                         path.with_name(f"{path.stem}.x264-audio.m4a")))
-
-        nvenc_error = None
-        for label, codec, preset, ffmpeg_params, temp_path, temp_audio in attempts:
-            self.last_video_encoder = label
-            self.encoding_active = True
-            if stage_callback:stage_callback("encoding",f"Encoding MP4 with {label} at 30 fps…")
+        label = "CPU libx264"
+        temp_path = path.with_name(f"{path.stem}.x264-temp.mp4")
+        temp_audio = path.with_name(f"{path.stem}.x264-audio.m4a")
+        self.last_video_encoder = label
+        if stage_callback:
+            stage_callback("encoding", "Encoding MP4 on the CPU with libx264 at 30 fps…")
+        for stale in (temp_path, temp_audio):
             try:
-                for stale in (temp_path, temp_audio):
-                    try:
-                        stale.unlink()
-                    except OSError:
-                        pass
-                final.write_videofile(
-                    str(temp_path), fps=30, codec=codec, audio_codec="aac",
-                    preset=preset, threads=4, logger=logger,
-                    temp_audiofile=str(temp_audio), ffmpeg_params=ffmpeg_params)
-                if not temp_path.is_file() or temp_path.stat().st_size == 0:
-                    raise RuntimeError(f"{label} did not produce a video file")
-                os.replace(temp_path, path)
-                self.last_video_encoder = label
-                print(f"[video] Encoded {path.name} using {label}")
-                if stage_callback:stage_callback("encoding",f"MP4 encoding complete using {label}.")
-                return
-            except Exception as exc:
-                if cancel_check:
-                    cancel_check()
-                if codec == "h264_nvenc":
-                    nvenc_error = exc
-                    self._nvenc_unavailable_binary = ffmpeg_key
-                    print(f"[video] NVENC unavailable; falling back to CPU libx264: {exc}")
-                    if stage_callback:stage_callback("encoding","NVENC unavailable; retrying the MP4 encode on the CPU…")
-                else:
-                    if nvenc_error:
-                        raise RuntimeError(
-                            f"NVENC encoding failed ({nvenc_error}); CPU libx264 fallback failed ({exc})."
-                        ) from exc
-                    raise
-            finally:
-                self.encoding_active = False
-                for stale in (temp_path, temp_audio):
-                    try:
-                        stale.unlink()
-                    except OSError:
-                        pass
+                stale.unlink()
+            except OSError:
+                pass
+        try:
+            final.write_videofile(
+                str(temp_path),
+                fps=30,
+                codec="libx264",
+                audio_codec="aac",
+                preset="medium",
+                threads=4,
+                logger=logger,
+                temp_audiofile=str(temp_audio),
+            )
+            if not temp_path.is_file() or temp_path.stat().st_size == 0:
+                raise RuntimeError("CPU libx264 did not produce a video file.")
+            os.replace(temp_path, path)
+            print(f"[video] Encoded {path.name} using {label}")
+            if stage_callback:
+                stage_callback("encoding", "CPU MP4 encoding complete with libx264.")
+        except Exception:
+            if cancel_check:
+                cancel_check()
+            raise
+        finally:
+            for stale in (temp_path, temp_audio):
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
 
     def create(self, script: dict, media_items: list, audio_paths: list, video_id: str,
                progress_callback=None, video_title: str | None = None,
-               resolution: str = "720p", use_nvenc: bool = True,
+               resolution: str = "720p",
                stage_callback=None, cancel_check=None) -> str:
         output_size = {"720x480": (720, 480), "720p": (1280, 720), "1080p": (1920, 1080)}.get(str(resolution).lower())
         if output_size is None:
@@ -84,7 +65,6 @@ class VideoAssembler:
         self.last_music_style = None
         self.last_music_error = None
         self.last_video_encoder = None
-        self.encoding_active = False
         try:
             from PIL import Image
             # MoviePy 1.x still references Image.ANTIALIAS, removed by Pillow 10.
@@ -101,7 +81,7 @@ class VideoAssembler:
         except Exception as exc:
             details = str(exc)
             if "cannot load module more than once per process" in details.lower():
-                hint = "NumPy was initialized more than once. This commonly happens when a CUDA build upgrades NumPy; rebuild with the latest build-desktop-windows-cuda.bat, which pins NumPy 1.26.4."
+                hint = "NumPy was initialized more than once. Reinstall the pinned backend media dependencies and restart the app."
             else:
                 hint = "MoviePy could not be loaded. Reinstall the backend media dependencies."
             raise RuntimeError(f"MoviePy could not be loaded ({type(exc).__name__}: {details}). {hint}") from exc
@@ -248,7 +228,7 @@ class VideoAssembler:
             path = DIRS["videos"] / f"{video_id}.mp4"
             if cancel_check:
                 cancel_check()
-            self._encode_video(final, path, FFMPEG_BINARY, use_nvenc, moviepy_logger, stage_callback, cancel_check)
+            self._encode_video(final, path, moviepy_logger, stage_callback, cancel_check)
             if progress_callback:
                 progress_callback(1.0)
             return str(path)
