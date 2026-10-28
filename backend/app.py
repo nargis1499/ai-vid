@@ -6,15 +6,14 @@ from pathlib import Path
 from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 import common
-from common import DIRS, ROOT_DIR, env_bool
+from common import ROOT_DIR
 from settings_store import APP_DATA_DIR, apply_environment, load_settings, public_settings, save_settings
-from ollama_runtime import OllamaRuntime
 
 _boot_settings = load_settings()
 apply_environment(_boot_settings)
 common.OUTPUT_DIR = Path(_boot_settings["OUTPUT_DIR"]).expanduser().resolve()
 common.DIRS.clear()
-common.DIRS.update({name: common.OUTPUT_DIR / name for name in ("images", "audio", "videos", "clips", "thumbnails", "local_ai", "uploads", "batch")})
+common.DIRS.update({name: common.OUTPUT_DIR / name for name in ("images", "audio", "videos", "clips", "thumbnails", "uploads", "batch")})
 for _directory in common.DIRS.values():
     _directory.mkdir(parents=True, exist_ok=True)
 from batch_orchestrator import BatchOrchestrator
@@ -23,14 +22,13 @@ app=Flask(__name__,static_folder=None)
 CORS(app)
 app.config["MAX_CONTENT_LENGTH"]=100*1024*1024
 orchestrator=BatchOrchestrator()
-app.config["OLLAMA_RUNTIME"]=OllamaRuntime(load_settings)
 FRONTEND=ROOT_DIR/"frontend"
-_OPENROUTER_FREE_MODELS_CACHE={"loaded_at":0.0,"models":[]}
+_OPENROUTER_MODELS_CACHE={"loaded_at":0.0,"models":[]}
 
-def _openrouter_free_models():
-    """Return only free text-output models, cached briefly to keep Settings responsive."""
+def _openrouter_models():
+    """Return text-output models available through OpenRouter, cached for Settings."""
     now=time.time()
-    cached=_OPENROUTER_FREE_MODELS_CACHE
+    cached=_OPENROUTER_MODELS_CACHE
     if cached["models"] and now-cached["loaded_at"]<600:
         return cached["models"]
     response=requests.get(
@@ -49,21 +47,22 @@ def _openrouter_free_models():
         model_id=str(item.get("id") or "").strip()
         if not model_id:
             continue
-        free_variant=model_id.endswith(":free") or model_id=="openrouter/free"
-        if not free_variant:
-            continue
         architecture=item.get("architecture") or {}
         modalities=architecture.get("output_modalities") if isinstance(architecture,dict) else None
-        if not isinstance(modalities,list) or "text" not in {str(value).lower() for value in modalities}:
+        if isinstance(modalities,list) and "text" not in {str(value).lower() for value in modalities}:
             continue
+        pricing=item.get("pricing") if isinstance(item.get("pricing"),dict) else {}
         models.append({
             "id":model_id,
             "name":str(item.get("name") or model_id),
             "context_length":item.get("context_length"),
+            "input_price":pricing.get("prompt"),
+            "output_price":pricing.get("completion"),
+            "free":model_id.endswith(":free") or model_id=="openrouter/free",
         })
     models.sort(key=lambda item:(item["name"].lower(),item["id"].lower()))
     if not models:
-        raise ValueError("OpenRouter returned no free text-generation models.")
+        raise ValueError("OpenRouter returned no text-generation models.")
     cached.update(loaded_at=now,models=models)
     return models
 
@@ -73,70 +72,18 @@ def _apply_runtime_settings(settings):
     output_dir.mkdir(parents=True, exist_ok=True)
     common.OUTPUT_DIR=output_dir
     common.DIRS.clear()
-    common.DIRS.update({name: output_dir/name for name in ("images", "audio", "videos", "clips", "thumbnails", "local_ai", "uploads", "batch")})
+    common.DIRS.update({name: output_dir/name for name in ("images", "audio", "videos", "clips", "thumbnails", "uploads", "batch")})
     for directory in common.DIRS.values(): directory.mkdir(parents=True, exist_ok=True)
-    orchestrator.scripts.provider="openrouter"
     orchestrator.scripts.openrouter_api_key=os.getenv("OPENROUTER_API_KEY", "").strip()
     orchestrator.scripts.openrouter_model=os.getenv("OPENROUTER_MODEL", "").strip()
-    orchestrator.seo.enabled=env_bool("USE_OLLAMA", True)
-    orchestrator.seo.url=os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
-    orchestrator.seo.model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+    orchestrator.seo.api_key=orchestrator.scripts.openrouter_api_key
+    orchestrator.seo.model=orchestrator.scripts.openrouter_model
     orchestrator.images.api_key=os.getenv("PEXELS_API_KEY", "").strip()
     orchestrator.images.pixabay.set_api_key(os.getenv("PIXABAY_API_KEY", "").strip())
     orchestrator.fetcher.api_key=orchestrator.images.api_key
     orchestrator.fetcher.pixabay.set_api_key(os.getenv("PIXABAY_API_KEY", "").strip())
     orchestrator.youtube.max_uploads=int(os.getenv("MAX_UPLOADS_PER_DAY", "5"))
     orchestrator.audio.voice=os.getenv("EDGE_TTS_VOICE", "en-US-AriaNeural")
-    orchestrator.audio.configure(
-        engine=os.getenv("TTS_ENGINE", "chatterbox"),
-        chatterbox_python=os.getenv("CHATTERBOX_PYTHON", ""),
-    )
-    runtime=app.config.get("OLLAMA_RUNTIME")
-    if runtime:
-        if settings.get("USE_OLLAMA", True) and settings.get("OLLAMA_AUTO_START", True):
-            runtime.start()
-        else:
-            runtime.deactivate()
-
-def _gpu_status():
-    status=orchestrator.local.gpu_status()
-    if status.get("in_use"):
-        return status
-    if getattr(orchestrator.audio,"chatterbox_active",False) and getattr(orchestrator.audio,"last_device","") == "cuda":
-        status.update(available=True,state="active",in_use=True,device="NVIDIA GPU",operation="Chatterbox voice generation",message="Generating natural voiceover with Chatterbox on the NVIDIA GPU.")
-        return status
-    if getattr(orchestrator.assembler,"encoding_active",False) and getattr(orchestrator.assembler,"last_video_encoder",None)=="NVIDIA NVENC":
-        status.update(available=True,state="active",in_use=True,device="NVIDIA GPU",operation="NVENC video encoding",message="Encoding video with NVIDIA NVENC.")
-        return status
-    if env_bool("USE_OLLAMA",True):
-        base_url=os.getenv("OLLAMA_URL","http://localhost:11434").rstrip("/")
-        model_name=os.getenv("OLLAMA_MODEL","qwen2.5:7b").lower()
-        try:
-            response=requests.get(base_url+"/api/ps",timeout=1)
-            response.raise_for_status()
-            loaded=response.json().get("models",[])
-            ollama_busy=False
-            with orchestrator.lock:
-                for batch in orchestrator.batches.values():
-                    for video in batch.get("videos",[]):
-                        if video.get("status")=="processing" and video.get("current_stage") in {"script","seo"}:
-                            ollama_busy=True;break
-                    if ollama_busy:break
-            for model in loaded:
-                name=str(model.get("name") or model.get("model") or "").lower()
-                if name==model_name or name==model_name+":latest":
-                    vram=int(model.get("size_vram") or 0)
-                    if vram>0:
-                        model_label=model.get("name") or model_name
-                        status.update(available=True,device=status.get("device") or "Ollama GPU",vram_used_gb=round(vram/(1024**3),1),loaded=True,operation=f"Ollama · {model_label}")
-                        if ollama_busy:
-                            status.update(state="active",in_use=True,message=f"GPU in use by Ollama · {model_label}")
-                        else:
-                            status.update(state="loaded",in_use=False,message=f"Ollama model loaded in GPU memory · idle · {model_label}")
-                        return status
-        except (requests.RequestException,ValueError,TypeError):
-            pass
-    return status
 
 @app.get("/")
 def index():return send_from_directory(FRONTEND,"index.html")
@@ -151,6 +98,8 @@ def create_batch():
     if not isinstance(titles,list):return jsonify({"error":"titles must be a list of titles"}),400
     titles=[str(t).strip()[:200] for t in titles if str(t).strip()]
     if not titles:return jsonify({"error":"Enter at least one video title."}),400
+    if not os.getenv("OPENROUTER_API_KEY", "").strip():return jsonify({"error":"Add your OpenRouter API key in Settings before generating videos."}),400
+    if not os.getenv("OPENROUTER_MODEL", "").strip():return jsonify({"error":"Choose an OpenRouter text model in Settings before generating videos."}),400
     if len(titles)>30:return jsonify({"error":"A batch can contain at most 30 titles."}),400
     custom_scripts=body.get("custom_scripts")
     if custom_scripts is not None:
@@ -174,7 +123,6 @@ def create_batch():
 def batch_status(batch_id):
     state=orchestrator.get_status(batch_id)
     if not state:return jsonify({"error":"Batch not found"}),404
-    state["gpu_status"]=_gpu_status()
     return jsonify(state)
 
 @app.post("/api/batch/<batch_id>/stop")
@@ -190,9 +138,6 @@ def publish_video(batch_id,index):
     started,message=orchestrator.start_manual_publish(batch_id,index)
     return (jsonify({"success":True,"message":message}),202) if started else (jsonify({"error":message}),409)
 
-@app.get("/api/gpu/status")
-def gpu_status():
-    return jsonify(_gpu_status())
 @app.get("/api/batch/list")
 def batch_list():return jsonify({"batches":orchestrator.list_batches()})
 @app.post("/api/youtube/auth")
@@ -201,66 +146,6 @@ def youtube_auth():
     return jsonify(orchestrator.youtube.status()),(200 if ok else 400)
 @app.get("/api/youtube/status")
 def youtube_status():return jsonify(orchestrator.youtube.status())
-
-@app.get("/api/ollama/status")
-def ollama_status():
-    """Report service reachability, model installation, and actual model load state."""
-    model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b").strip()
-    runtime=app.config.get("OLLAMA_RUNTIME")
-    runtime_status=runtime.status() if runtime else None
-    if not env_bool("USE_OLLAMA", True):
-        return jsonify({"state":"disabled","model":model,"installed":False,"loaded":False,"detail":"Ollama use is disabled in Settings.","runtime":runtime_status})
-    base_url=os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
-    try:
-        tags_response=requests.get(f"{base_url}/api/tags", timeout=2.5)
-        tags_response.raise_for_status()
-        installed_models=tags_response.json().get("models", [])
-        def same_model(candidate):
-            name=str(candidate or "").strip().lower()
-            target=model.lower()
-            return name==target or name==target+":latest" or (target.endswith(":latest") and name==target[:-7])
-        installed=any(same_model(entry.get("name") or entry.get("model")) for entry in installed_models)
-        loaded=False
-        try:
-            ps_response=requests.get(f"{base_url}/api/ps", timeout=2.5)
-            ps_response.raise_for_status()
-            loaded=any(same_model(entry.get("name") or entry.get("model")) for entry in ps_response.json().get("models", []))
-        except requests.RequestException:
-            # Service is reachable even if its process-list endpoint is unavailable.
-            loaded=False
-        if loaded:
-            state,detail="running",f"{model} is loaded and running in Ollama."
-        elif installed:
-            state,detail="ready",f"{model} is installed; Ollama loads it when a generation request arrives."
-        else:
-            state,detail="missing",f"Ollama is reachable, but {model} is not installed. Run: ollama pull {model}"
-        if runtime_status and runtime_status.get("state") in {"starting", "warming", "pulling"}:
-            state=runtime_status["state"]
-            detail=runtime_status.get("detail", detail)
-        return jsonify({"state":state,"model":model,"installed":installed,"loaded":loaded,"detail":detail,"runtime":runtime_status})
-    except requests.RequestException:
-        runtime_state=runtime_status.get("state") if runtime_status else None
-        pending=runtime_state in {"checking", "starting", "warming", "pulling", "not-installed", "error"}
-        state=runtime_state if pending else "offline"
-        detail=runtime_status.get("detail") if pending else f"Cannot reach Ollama at {base_url}. Start the Ollama app/service."
-        return jsonify({"state":state,"model":model,"installed":False,"loaded":False,"detail":detail,"runtime":runtime_status})
-    except (ValueError, TypeError) as exc:
-        return jsonify({"state":"error","model":model,"installed":False,"loaded":False,"detail":f"Could not read Ollama status: {exc}","runtime":runtime_status})
-
-@app.post("/api/ollama/start")
-def start_ollama():
-    runtime=app.config.get("OLLAMA_RUNTIME")
-    if not runtime:
-        return jsonify({"error":"Ollama desktop runtime is unavailable."}),503
-    return jsonify(runtime.activate()),202
-
-@app.post("/api/ollama/pull")
-def pull_ollama_model():
-    runtime=app.config.get("OLLAMA_RUNTIME")
-    if not runtime:
-        return jsonify({"error":"Ollama desktop runtime is unavailable."}),503
-    result=runtime.pull_model()
-    return (jsonify(result),202) if result.get("started") else (jsonify(result),409)
 
 @app.get("/api/video/<batch_id>/<int:index>")
 def get_video(batch_id,index):
@@ -286,12 +171,12 @@ def get_thumbnail(batch_id,index):
     if not path or not Path(path).is_file():return jsonify({"error":"Thumbnail is not ready"}),404
     return send_file(path,as_attachment=True,download_name=Path(path).name,mimetype="image/jpeg")
 
-@app.get("/api/openrouter/free-models")
-def openrouter_free_models():
+@app.get("/api/openrouter/models")
+def openrouter_models():
     try:
-        return jsonify({"models":_openrouter_free_models()})
+        return jsonify({"models":_openrouter_models()})
     except (requests.RequestException,ValueError,TypeError) as exc:
-        return jsonify({"error":f"Could not load OpenRouter's free text models: {exc}"}),502
+        return jsonify({"error":f"Could not load OpenRouter text models: {exc}"}),502
 
 @app.get("/api/settings")
 def get_settings():
@@ -342,11 +227,10 @@ def save_youtube_credentials():
         return jsonify({"error":f"Could not save credentials: {exc}"}),400
 
 @app.get("/api/health")
-def health():return jsonify({"ok":True,"service":"CreatorFlow Desktop"})
+def health():return jsonify({"ok":True,"service":"CreatorFlow Web App"})
 
 if __name__=="__main__":
     print("YouTube Auto Creator starting on http://localhost:5000")
-    print("GPU generation enabled:",orchestrator.local.available)
+    print("Text generation: OpenRouter hosted model")
     print("YouTube:","connected" if orchestrator.youtube.status()["connected"] else "not configured")
-    app.config["OLLAMA_RUNTIME"].start()
     app.run(host="0.0.0.0",port=int(os.getenv("PORT","5000")),debug=False,threaded=True)

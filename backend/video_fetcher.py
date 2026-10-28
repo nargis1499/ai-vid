@@ -134,7 +134,7 @@ class VideoFetcher:
                     continue
                 relevance = self._relevance(query, video)
                 # Prefer stronger slug/keyword overlap, while keeping every usable
-                # Pexels-ranked result eligible so weaker matches can beat an SDXL fallback.
+                # Pexels-ranked result eligible so a relevant stock match wins over a designed fallback.
                 candidates.append((relevance, rank, video, files))
 
             if not candidates:

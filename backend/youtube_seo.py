@@ -1,29 +1,98 @@
-"""SEO package generation through Ollama, with sensible offline metadata."""
-import json,re,os,requests
-from common import env_bool
+"""Generate SEO and thumbnail text using the configured OpenRouter text model."""
+import json
+import os
+import re
+
+import requests
+
+
 class YouTubeSEO:
-    def __init__(self):self.enabled=env_bool("USE_OLLAMA",True);self.url=os.getenv("OLLAMA_URL","http://localhost:11434").rstrip("/");self.model=os.getenv("OLLAMA_MODEL","qwen2.5:7b")
-    def generate_seo_package(self,title:str,script:dict,niche:str)->dict:
-        if self.enabled:
-            scene_brief=[{"visual":str(scene.get("visual_description", ""))[:180],"keywords":str(scene.get("search_keywords", ""))[:120],"narration":str(scene.get("narration", ""))[:180]} for scene in script.get("scenes", [])[:10] if isinstance(scene, dict)]
-            prompt=f'''Create YouTube SEO metadata for title {title!r}, niche {niche!r}, script summary {script.get('description','')!r}, and scene plan {scene_brief!r}. Return only JSON: {{"seo_title":"max 60 characters","seo_description":"500-1000 characters, keywords in first 150 chars, CTA, hashtags at end","tags":["15 relevant tags"],"category_id":"22","hashtag_line":"#tag1 #tag2 #tag3","thumbnail_text":"3-5 punchy words for a bold thumbnail headline, grounded in the script","thumbnail_subtitle":"short supporting phrase of 2-5 words, not a repetition of the headline","thumbnail_panels":["one distinct 1-3 word label per supplied scene, in scene-plan order, up to 10 labels"],"thumbnail_style":"visual description","pinned_comment":"engaging comment"}}. Make thumbnail wording specific to the video's actual subject and scene plan; preserve both named subjects in numbered lists/comparisons, separated with an ampersand; never invent places, people, or claims.'''
-            try:
-                r=requests.post(self.url+"/api/generate",json={"model":self.model,"prompt":prompt,"stream":False,"keep_alive":-1 if env_bool("OLLAMA_KEEP_ALIVE",True) else 0,"options":{"temperature":.6}},timeout=120);r.raise_for_status();raw=r.json().get("response","");raw=re.sub(r"^\s*```(?:json)?|```\s*$","",raw.strip(),flags=re.I);data=json.loads(raw[raw.find("{"):raw.rfind("}")+1])
-                if isinstance(data,dict):return self._normalize(data,title,script,niche)
-            except Exception as exc:print(f"[seo] Ollama unavailable; using fallback: {exc}")
-        words=[]
-        for s in script.get("scenes",[]):words.extend(str(s.get("search_keywords","")).split(","))
-        panel_labels=[str(scene.get("search_keywords") or scene.get("visual_description") or "") for scene in script.get("scenes", [])[:10] if isinstance(scene, dict)]
-        return self._normalize({"seo_title":title,"seo_description":f"Explore {title} in this {niche.lower()} video. Discover key ideas, practical context, and surprising details. Subscribe for more videos and share your thoughts in the comments!\n\n{title}","tags":list(dict.fromkeys([title,niche]+[w.strip() for w in words if w.strip()]))[:15],"category_id":"22","hashtag_line":"#YouTube #Education #"+re.sub(r"\W","",niche),"thumbnail_text":self._fallback_hook(title),"thumbnail_subtitle":"","thumbnail_panels":panel_labels,"thumbnail_style":f"Bold cinematic imagery related to {title}","pinned_comment":f"What surprised you most about {title}? Let us know below!"},title,script,niche)
+    def __init__(self):
+        self.api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+        self.model = os.getenv("OPENROUTER_MODEL", "").strip()
+        self.last_source = ""
+
+    def generate_seo_package(self, title: str, script: dict, niche: str) -> dict:
+        if not self.api_key or not self.model:
+            raise RuntimeError("OpenRouter API key and text model are required to generate video metadata.")
+        scene_brief = [
+            {
+                "visual": str(scene.get("visual_description", ""))[:180],
+                "keywords": str(scene.get("search_keywords", ""))[:120],
+                "narration": str(scene.get("narration", ""))[:180],
+            }
+            for scene in script.get("scenes", [])[:10]
+            if isinstance(scene, dict)
+        ]
+        prompt = f'''Create YouTube SEO metadata for title {title!r}, niche {niche!r}, script summary {script.get('description','')!r}, and scene plan {scene_brief!r}. Return only JSON: {{"seo_title":"max 60 characters","seo_description":"500-1000 characters, keywords in first 150 chars, CTA, hashtags at end","tags":["15 relevant tags"],"category_id":"22","hashtag_line":"#tag1 #tag2 #tag3","thumbnail_text":"3-5 punchy words for a bold thumbnail headline, grounded in the script","thumbnail_subtitle":"short supporting phrase of 2-5 words, not a repetition of the headline","thumbnail_panels":["one distinct 1-3 word label per supplied scene, in scene-plan order, up to 10 labels"],"thumbnail_style":"visual description","pinned_comment":"engaging comment"}}. Make thumbnail wording specific to the video's actual subject and scene plan; preserve both named subjects in numbered lists/comparisons, separated with an ampersand; never invent places, people, or claims.'''
+        try:
+            response = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                    "X-Title": "CreatorFlow",
+                },
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": "You create accurate YouTube SEO metadata and thumbnail copy. Return valid JSON only."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0.4,
+                    "max_tokens": 3000,
+                },
+                timeout=120,
+            )
+            if not response.ok:
+                try:
+                    payload = response.json()
+                    detail = (payload.get("error") or {}).get("message") if isinstance(payload, dict) else None
+                except (ValueError, TypeError):
+                    detail = None
+                detail = str(detail or response.text or "").strip()[:500]
+                raise RuntimeError(f"OpenRouter returned HTTP {response.status_code}: {detail or 'request failed'}")
+            payload = response.json()
+            content = payload["choices"][0]["message"]["content"]
+            if isinstance(content, list):
+                content = "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
+            data = self._parse_json(content)
+            self.last_source = f"OpenRouter · {self.model}"
+            return self._normalize(data, title, niche)
+        except (requests.RequestException, ValueError, TypeError, KeyError, IndexError) as exc:
+            raise RuntimeError(f"Could not generate video metadata with OpenRouter ({type(exc).__name__}: {exc}). Check the selected model and account quota, then retry.") from exc
+
     @staticmethod
-    def _normalize(data,title,script,niche):
-        result={"seo_title":str(data.get("seo_title") or title)[:100],"seo_description":str(data.get("seo_description") or f"Discover more about {title}. Subscribe for more.")[:5000],"tags":data.get("tags") if isinstance(data.get("tags"),list) else [title,niche],"category_id":str(os.getenv("YOUTUBE_CATEGORY_ID") or data.get("category_id") or "22"),"hashtag_line":str(data.get("hashtag_line") or "#YouTube"),"thumbnail_text":str(data.get("thumbnail_text") or YouTubeSEO._fallback_hook(title))[:80],"thumbnail_subtitle":str(data.get("thumbnail_subtitle") or "")[:80],"thumbnail_panels":data.get("thumbnail_panels") if isinstance(data.get("thumbnail_panels"),list) else [],"thumbnail_style":str(data.get("thumbnail_style") or title),"pinned_comment":str(data.get("pinned_comment") or f"What do you think about {title}?")}
-        result["tags"]=[str(t)[:100] for t in result["tags"][:30]]
-        result["thumbnail_panels"]=[str(label)[:80] for label in result["thumbnail_panels"][:10]]
+    def _parse_json(raw):
+        raw = re.sub(r"^\s*```(?:json)?|```\s*$", "", str(raw or "").strip(), flags=re.I)
+        start, end = raw.find("{"), raw.rfind("}")
+        if start < 0 or end < start:
+            raise ValueError("OpenRouter did not return JSON metadata.")
+        result = json.loads(raw[start:end + 1])
+        if not isinstance(result, dict):
+            raise ValueError("OpenRouter returned an invalid metadata object.")
         return result
 
     @staticmethod
-    def _fallback_hook(title):
-        stop={"a","an","the","in","on","at","of","to","for","and","or","why","how","what","when","where","is","are","your","you"}
-        words=re.findall(r"[\w'-]+",str(title or ""))
-        return " ".join(word for word in words if word.casefold() not in stop)[:80]
+    def _normalize(data, title, niche):
+        required = ("seo_title", "seo_description", "tags", "hashtag_line", "thumbnail_text", "thumbnail_subtitle", "thumbnail_panels", "thumbnail_style", "pinned_comment")
+        missing = [key for key in required if not data.get(key)]
+        if missing:
+            raise ValueError("OpenRouter metadata is missing required fields: " + ", ".join(missing))
+        if not isinstance(data["tags"], list) or not isinstance(data["thumbnail_panels"], list):
+            raise ValueError("OpenRouter metadata tags and thumbnail panels must be lists.")
+        result = {
+            "seo_title": str(data["seo_title"])[:100],
+            "seo_description": str(data["seo_description"])[:5000],
+            "tags": data["tags"],
+            "category_id": str(os.getenv("YOUTUBE_CATEGORY_ID") or data.get("category_id") or "22"),
+            "hashtag_line": str(data["hashtag_line"]),
+            "thumbnail_text": str(data["thumbnail_text"])[:80],
+            "thumbnail_subtitle": str(data["thumbnail_subtitle"])[:80],
+            "thumbnail_panels": data["thumbnail_panels"],
+            "thumbnail_style": str(data["thumbnail_style"]),
+            "pinned_comment": str(data["pinned_comment"]),
+        }
+        result["tags"] = [str(tag)[:100] for tag in result["tags"][:30]]
+        result["thumbnail_panels"] = [str(label)[:80] for label in result["thumbnail_panels"][:10]]
+        return result

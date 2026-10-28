@@ -1,82 +1,67 @@
 # CreatorFlow — YouTube Video Automation
 
-CreatorFlow turns a list of titles into narrated, edited videos with thumbnails and SEO metadata. It can publish to YouTube after you configure OAuth. The Windows **desktop app** opens in its own window, starts its local backend automatically, and offers app configuration in **Settings**—no browser tab, `python app.py`, or manual virtual-environment activation for normal use.
+CreatorFlow is a web app that turns video-title lists into narrated, edited videos with thumbnails and YouTube metadata. Scripts, scene plans, SEO metadata, and thumbnail copy use the **same selected hosted OpenRouter text model**. The app does not load or run local AI models.
 
 ![CreatorFlow studio UI preview](screenshots/creator-studio-preview.png)
 
-## Windows desktop app (recommended)
+## Run the web app
 
-### One-time build
+Install Python 3.11 and FFmpeg, then install the backend dependencies and start Flask:
 
-The packaged app is built on Windows. Install **Python 3.11** (the pinned PyTorch/MoviePy stack does not currently support Python 3.13/3.15 reliably), **FFmpeg**, and the **Microsoft Edge WebView2 Runtime** (usually already present on Windows 11). Add Python and FFmpeg to PATH. You do not need to activate a virtual environment yourself.
+```bash
+python -m pip install -r backend/requirements.txt
+python backend/app.py
+```
 
-1. Download/clone this repository and open its folder in File Explorer.
-2. Double-click `build-desktop-windows.bat` for the standard build, or `build-desktop-windows-cuda.bat` if you want to package CUDA-enabled PyTorch for local GPU image/video generation.
-3. The build script creates and manages its own private build environment, installs the dependencies, and packages the application. This first build can take a while and requires internet access; the CUDA build downloads several GB.
-4. When it finishes, launch `backend\dist\CreatorFlow\CreatorFlow.exe`. Keep the whole `CreatorFlow` folder together when moving/copying the packaged app.
+Open the URL printed by Flask (normally `http://localhost:5000`). Generated videos and thumbnails are saved to the configured output folder.
 
-After packaging, open the EXE like a normal desktop app. CreatorFlow starts its local server and opens a native app window automatically. You do not type `python app.py` or activate `.venv` to use it. Generated files default to `%APPDATA%\CreatorFlow\output`.
+## Configure CreatorFlow
 
-### Configure everything from the app
+Open **Settings** in the web app:
 
-Open **Settings** in the header. Configure:
+- **OpenRouter:** choose a text-output model from the live model list and use your existing OpenRouter API key in Settings. The selected model handles regular and custom scripts, scene plans, SEO metadata, and thumbnail copy. Paid models may incur OpenRouter usage charges. Prompts and custom drafts are sent to OpenRouter; the key is stored in per-user settings and is not returned to the browser. If OpenRouter is unavailable or returns incomplete output, generation fails rather than silently switching to a fallback.
+- **Stock visuals:** CreatorFlow prefers the closest Pexels or Pixabay clip, then a stock still. If neither is available, it creates a designed gradient fallback; it does not download or run an image-generation model. Add stock API keys in Settings. Search results are cached locally and selected media is downloaded rather than hotlinked.
+- **Narration:** voiceovers use Microsoft's hosted Edge TTS service and require an internet connection. Choose a voice and pace in the video brief. If hosted narration fails, generation stops with an error—there is no Chatterbox or offline system-voice fallback.
+- **Music and rendering:** background music is created procedurally (not with an AI model). Video assembly, captions, and encoding run on the app host; optional NVIDIA NVENC is hardware video encoding, not AI inference.
+- **Thumbnails:** template-matched collage layouts use up to five scene visuals, bold Montserrat typography, warm dividers, and concise labels. When a headline names multiple subjects, the generator matches existing scene visuals and searches stock stills/clips for missing subjects instead of repeating an unrelated image. Downloadable JPEGs use the standard 1280 × 720 YouTube size. Enable **Thumbnail generation only** to skip narration, MP4 rendering, upload, and batch delays.
+- **YouTube and batches:** select default privacy/category, daily upload cap, delay between titles, and output folder. Add the Google Desktop OAuth JSON in Settings. Stop an active batch from its progress panel; when automatic publishing is off, publish a finished video individually from its result row.
 
-- **Scripts and Ollama:** choose local Ollama drafting or an OpenRouter free text model. In OpenRouter mode, the hosted model creates a draft and Ollama is required to analyze, edit, and finalize it locally; drafts are never used if local review fails. Add the OpenRouter key in Settings, select a model from the live free-model list, and keep Ollama enabled. The key is stored in your per-user settings file and is not returned to the browser. Ollama also prepares metadata and reviews custom scripts. At launch CreatorFlow looks for Ollama; if installed, it starts the local service when needed and loads the selected model if it is already downloaded. If the model is missing, use **Download model** in Settings. Model downloads are explicit because they can be several GB.
-- **Visuals:** CreatorFlow searches Pexels first, then Pixabay for the closest available stock clip, accepting weaker matches if needed. If no usable clip is found, it downloads a Pexels or Pixabay stock still; optional local SDXL still generation is used only when no stock image is available. Search responses are cached locally for 24 hours, and selected media is downloaded locally rather than hotlinked. Fallback stills use standard scene transitions; local video diffusion is not used. Pixabay's official API does not offer music search, so background music continues to be generated locally.
-- **Thumbnails:** template-matched collage layouts use up to five scene visuals, bold Montserrat typography, warm dividers, and concise labels. When the headline names multiple subjects, the generator matches existing scene visuals and searches stock stills/clips for missing subjects instead of repeating an unrelated image. Each downloadable JPEG uses the standard 1280 × 720 YouTube thumbnail size. Enable **Thumbnail generation only** in the video brief to create and download a cover without voiceover, MP4 rendering, or upload.
-- **Narration and captions:** Chatterbox is the default natural-sounding local voice engine. Choose Slower, Slow, Medium, or Faster narration pace in the video brief; pace changes preserve pitch and the captions follow the adjusted audio timing. Edge TTS remains selectable, with the OS voice as a final fallback. Burned-in, word-highlight captions use bundled Montserrat SemiBold with no background box; downloaded SRT captions are plain text. On Windows, run `.\\backend\\setup_chatterbox_windows.ps1` in PowerShell to install Chatterbox into a separate Python environment; this keeps the app's PyTorch 2.2 GPU stack intact. The first Chatterbox voiceover downloads its model weights. You can set a custom Chatterbox Python path in Settings if needed.
-- **Fast drafts:** choose a 10-second video target and 720 × 480 SD export for quicker previews; scripts use a single scene for the short format.
-- **YouTube and batches:** select default privacy/category, daily upload cap, delay between titles, and the output folder. Use the file picker in Settings to add the Google Desktop OAuth JSON. Stop an active batch from its progress panel; when automatic publishing is off, publish any finished video individually from its result row.
+Settings and API keys are stored per-user under `%APPDATA%\CreatorFlow\settings.json` on Windows, or the platform's application-settings folder. OAuth credentials and tokens are also stored there. The settings file is local plaintext; protect your account and do not share the file.
 
-Settings and API keys are stored per-user under `%APPDATA%\CreatorFlow\settings.json` on Windows (OAuth credentials and token are also stored in that folder). They are not committed to this repository. The settings file is local plaintext; protect your Windows account and do not share the file.
+## No local AI models
 
-The Ollama badge shows **Running** when the selected model is loaded, **Idle · ready** when installed but not currently loaded, and a clear state when missing or unreachable. If **Keep the model loaded** is enabled, CreatorFlow asks Ollama to keep it in memory while the app is open and unloads it when the desktop app closes. With the local Ollama drafting provider selected, generation can fall back to built-in templates if Ollama is unavailable; OpenRouter drafts and custom scripts instead fail rather than bypassing the required local Ollama review.
+CreatorFlow no longer depends on Ollama, SDXL/Diffusers, Chatterbox, or an offline TTS model. You do not need to install or download model weights. OpenRouter handles text-generation tasks; visuals come from licensed stock or a designed fallback, and narration uses hosted Edge TTS. Ordinary video editing and encoding still run locally on the app host.
 
-### YouTube OAuth setup
+## YouTube OAuth setup
 
 1. In [Google Cloud Console](https://console.cloud.google.com/), enable **YouTube Data API v3** and configure the OAuth consent screen.
 2. Create an OAuth client of type **Desktop app** and download its JSON file.
-3. In CreatorFlow **Settings**, choose that JSON file. Then select **Connect channel** in the sidebar and complete Google's consent flow. Google may open a system browser briefly for OAuth; the CreatorFlow interface itself remains a desktop app.
+3. In CreatorFlow **Settings**, choose that JSON file. Then select **Connect channel** in the sidebar and complete Google's consent flow.
 4. Uploads are opt-in for each batch and default to **Private**. Review each generated video before switching to Unlisted or Public.
 
-## Requirements and optional services
+## Requirements
 
-- Windows 10/11; Python 3.11 is only required for building from source, not for running the packaged app.
-- FFmpeg on PATH for MP4 export.
-- Ollama installed locally for local LLM scripts and metadata. Install Ollama from [ollama.com](https://ollama.com/download). You can download the default model in the app or run `ollama pull qwen2.5:7b` separately.
-- Pexels and/or Pixabay API key for stock photos and clips (optional; add keys in app Settings). Pixabay supports image/video search only; music remains locally generated.
-- NVIDIA GPU and CUDA-enabled packaged build for local diffusion models (optional; initial model weights are large).
+- Python 3.11 and FFmpeg for running from source.
+- An OpenRouter API key and a selected text model.
+- Internet access for OpenRouter, hosted Edge TTS, and stock-media providers.
+- Pexels and/or Pixabay API keys for stock photos and clips (optional).
 - Google OAuth JSON for YouTube uploads (optional).
-
-Ollama itself is a separate local program; CreatorFlow can start its service and run an installed model, but it does not install Ollama silently. Without Pexels or Pixabay keys, the app uses locally generated gradients. Local SDXL image fallback is optional and off until enabled in Settings. Chatterbox runs locally when its optional isolated runtime is installed; Edge TTS uses Microsoft's online service, and the app tries the installed operating-system voice if Edge TTS fails.
-
-## Build from source / developer mode
-
-For development only, install Python 3.11 and FFmpeg, then run the Windows build script above. It creates `backend/.venv` automatically. To run the Flask backend in a terminal during development, install `backend/requirements.txt` and launch `backend/app.py`; standard users should use the packaged desktop EXE instead.
-
-The desktop-specific dependencies are in `backend/requirements-desktop.txt`. The Windows build scripts use PyInstaller in **one-folder** mode for reliable WebView2 packaging. For a CUDA build, PyTorch is installed from the official CUDA 12.1 wheel index before packaging; the machine still needs a current NVIDIA driver.
 
 ## Troubleshooting
 
-- **Build says Python 3.11 not found:** install Python 3.11, then double-click the build script again. Python 3.13/3.15 is not suitable for this pinned stack.
-- **The EXE cannot open a window:** install/update Microsoft Edge WebView2 Runtime and relaunch.
-- **Ollama is offline:** install the Ollama Windows app. CreatorFlow can start its service; use Settings → **Start / load model** to retry. Ensure the model selected in Settings is installed, or choose **Download model**.
-- **Local AI reports no GPU:** the standard build may not contain the CUDA wheel. Rebuild with `build-desktop-windows-cuda.bat`, update your NVIDIA driver, and check that the GPU is available.
-- **MoviePy reports `cannot load module more than once per process`:** rebuild the CUDA desktop app with the latest `build-desktop-windows-cuda.bat`. The CUDA PyTorch installer can otherwise upgrade NumPy to 2.x; the current build script restores and verifies NumPy 1.26.4 before packaging.
-- **MP4 export says MoviePy/FFmpeg is required:** in Settings, set FFmpeg executable to `ffmpeg-imageio` (default) or the full path from `where.exe ffmpeg`. The packaging script bundles MoviePy, NumPy, ImageIO and the FFmpeg binary. The assembler reports the underlying import/FFmpeg error instead of hiding it. For source installs, reinstall `moviepy==1.0.3` and `imageio-ffmpeg` in the app environment.
-- **Other MP4 export failures:** install FFmpeg and add the directory containing `ffmpeg.exe` to PATH, then relaunch CreatorFlow.
-- **No voiceover:** Edge TTS requires internet access. The app now tries the local Windows speech voice if Edge TTS fails; if neither produces valid audio, it marks the video failed instead of exporting a silent MP4. Rebuild the desktop EXE to include the offline TTS fallback.
-- **No stock visuals:** add a valid Pexels or Pixabay key in Settings; generated gradients/stills are used otherwise.
-- **YouTube OAuth issue:** verify that the Data API is enabled and the Desktop OAuth client is selected in Settings. Test users may need to be added to the Google consent screen.
-- **Pillow/MoviePy compatibility:** the video assembler includes a compatibility alias for the legacy MoviePy 1.x `Image.ANTIALIAS` reference.
+- **OpenRouter model list does not load:** check the app host's internet connection. The catalog requires access to OpenRouter.
+- **Script generation fails:** check that an OpenRouter API key and text model are selected in Settings, and that the model/account has sufficient quota.
+- **No voiceover:** Edge TTS is hosted and requires internet access. Check the selected voice and retry; the app will not use a local voice model.
+- **No stock visuals:** add a valid Pexels or Pixabay key in Settings; a designed gradient fallback is used when stock is unavailable.
+- **MP4 export says MoviePy/FFmpeg is required:** set FFmpeg executable to `ffmpeg-imageio` (default) or its full path. For source installs, reinstall `moviepy==1.0.3` and `imageio-ffmpeg` in the backend environment.
+- **YouTube OAuth issue:** verify that YouTube Data API v3 is enabled and that the Desktop OAuth client is selected in Settings. Test users may need to be added to the Google consent screen.
 
 ## Repository layout
 
 ```text
-backend/                    Flask API, pipeline and desktop launcher
-frontend/                   CreatorFlow studio UI
-build-desktop-windows*.bat  One-click Windows packaging entry points
-output/                     Generated media in developer mode (git-ignored)
+backend/        Flask API and video pipeline
+frontend/       CreatorFlow web UI
+output/         Generated media (git-ignored)
 ```
 
 Do not put API keys, OAuth credentials, refresh tokens, or generated media in a public Git repository.
