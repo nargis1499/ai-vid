@@ -8,7 +8,9 @@ from common import DIRS, ROOT_DIR
 
 class VideoAssembler:
     TRANSITION_DURATION = 0.5
-    TRANSITION_STYLES = ("crossfade", "slide-left", "zoom-push", "slide-up")
+    # Keep scene content anchored to the frame. Translated slides can expose
+    # empty canvas edges during composition; zoom-push is cropped per-frame below.
+    TRANSITION_STYLES = ("crossfade", "zoom-push")
 
     def __init__(self):
         self.last_video_encoder = None
@@ -252,20 +254,36 @@ class VideoAssembler:
 
     @staticmethod
     def _apply_scene_transition(clip, style, duration, frame_size):
-        width, height = frame_size
-        if style == "slide-left":
-            return clip.crossfadein(min(0.14, duration)).set_position(
-                lambda t: (int(width * (1 - min(1.0, max(0.0, t) / duration))), 0)
-            )
-        if style == "slide-up":
-            return clip.crossfadein(min(0.14, duration)).set_position(
-                lambda t: (0, int(height * (1 - min(1.0, max(0.0, t) / duration))))
-            )
+        width, height = (int(frame_size[0]), int(frame_size[1]))
         if style == "zoom-push":
-            zoomed = clip.resize(lambda t: 1.10 - 0.10 * min(1.0, max(0.0, t) / duration))
-            zoomed = zoomed.crop(x_center=zoomed.w / 2, y_center=zoomed.h / 2,
-                                 width=width, height=height)
+            import numpy as np
+            from PIL import Image
+            from moviepy.editor import VideoClip
+
+            resampling = getattr(Image, "Resampling", Image).LANCZOS
+
+            def zoom_frame(t):
+                # Recalculate the crop from each resized frame; a fixed crop
+                # rectangle extends past the image as the zoom shrinks and
+                # creates black strips along the right and bottom edges.
+                frame = clip.get_frame(t)
+                progress = min(1.0, max(0.0, t) / max(duration, 0.001))
+                scale = 1.10 - 0.10 * progress
+                if scale <= 1.0 and frame.shape[1] == width and frame.shape[0] == height:
+                    return frame
+                if scale > 1.0:
+                    crop_width = max(1, int(round(frame.shape[1] / scale)))
+                    crop_height = max(1, int(round(frame.shape[0] / scale)))
+                    left = max(0, (frame.shape[1] - crop_width) // 2)
+                    top = max(0, (frame.shape[0] - crop_height) // 2)
+                    frame = frame[top:top + crop_height, left:left + crop_width]
+                return np.asarray(Image.fromarray(frame).resize((width, height), resampling))
+
+            zoomed = VideoClip(make_frame=zoom_frame, duration=clip.duration)
+            if getattr(clip, "fps", None):
+                zoomed = zoomed.set_fps(clip.fps)
             return zoomed.crossfadein(min(0.18, duration))
+        # A full-frame crossfade never translates a scene beyond the canvas.
         return clip.crossfadein(duration)
 
     @classmethod
