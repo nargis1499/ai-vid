@@ -18,7 +18,7 @@ SETTINGS_FILE = APP_DATA_DIR / "settings.json"
 DEFAULTS = {
     "USE_OLLAMA": True,
     "OLLAMA_MODEL": "qwen2.5:7b",
-    "SCRIPT_PROVIDER": "ollama",
+    "SCRIPT_PROVIDER": "openrouter",
     "OPENROUTER_API_KEY": "",
     "OPENROUTER_MODEL": "",
     "OLLAMA_URL": "http://localhost:11434",
@@ -55,6 +55,8 @@ def load_settings():
             values.update({key: val for key, val in saved.items() if key in DEFAULTS})
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         pass
+    # Script and scene-plan generation is always handled by OpenRouter.
+    values["SCRIPT_PROVIDER"] = "openrouter"
     if not values["OUTPUT_DIR"]:
         if getattr(sys, "frozen", False):
             values["OUTPUT_DIR"] = str(APP_DATA_DIR / "output")
@@ -76,16 +78,11 @@ def save_settings(updates):
             current[key] = str(value or "").strip()
         else:
             current[key] = str(value).strip()
-    if current["SCRIPT_PROVIDER"] not in {"ollama", "openrouter"}:
-        raise ValueError("Script provider must be Ollama or OpenRouter.")
-    if current["SCRIPT_PROVIDER"] == "openrouter":
-        model = current["OPENROUTER_MODEL"].strip()
-        if not current["OPENROUTER_API_KEY"].strip():
-            raise ValueError("Add your OpenRouter API key before selecting OpenRouter script drafting.")
-        if not (model.endswith(":free") or model == "openrouter/free"):
-            raise ValueError("Choose a free OpenRouter model from the model list.")
-        if not current["USE_OLLAMA"]:
-            raise ValueError("Enable Ollama: OpenRouter drafts are always reviewed and finalized locally.")
+    # Keep old saved settings compatible, but never route script work to a local model.
+    current["SCRIPT_PROVIDER"] = "openrouter"
+    model = current["OPENROUTER_MODEL"].strip()
+    if model and not (model.endswith(":free") or model == "openrouter/free"):
+        raise ValueError("Choose a free OpenRouter model from the model list.")
     if current["TTS_ENGINE"] not in {"chatterbox", "edge"}:
         raise ValueError("Narration voice engine must be Chatterbox or Edge TTS.")
     if current["YOUTUBE_PRIVACY_STATUS"] not in {"private", "unlisted", "public"}:
@@ -117,6 +114,7 @@ def apply_environment(settings):
         if key == "OUTPUT_DIR":
             continue
         os.environ[key] = str(value).lower() if isinstance(value, bool) else str(value)
+    os.environ["SCRIPT_PROVIDER"] = "openrouter"
 
 
 def public_settings(settings=None):
