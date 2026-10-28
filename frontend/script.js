@@ -1,6 +1,6 @@
-const $=s=>document.querySelector(s);const titlesEl=$('#titles');let activeBatch=null,pollTimer=null,toastTimer,lastTerminalToastBatch=null;
+const $=s=>document.querySelector(s);const titlesEl=$('#titles');let activeBatch=null,pollTimer=null,toastTimer,lastTerminalToastBatch=null,textProvider='openrouter',modelLoadToken=0;const selectedTextModels={openrouter:'',grok:''};
 const VIDEO_STEPS=[
- {key:'script',label:'Script & scene plan',hint:'OpenRouter writes and reviews narration and scene plans, including custom drafts.'},
+ {key:'script',label:'Script & scene plan',hint:'The selected text provider writes and reviews narration and scene plans, including custom drafts.'},
  {key:'images',label:'Find footage & create visuals',hint:'Prefer the closest Pexels or Pixabay clip, then a stock still or designed gradient fallback.'},
  {key:'clips',label:'Use footage & transitions',hint:'Stock clips provide motion; still fallback visuals use the assembler’s standard transitions.'},
  {key:'audio',label:'Generate voice narration',hint:'Create narration at the selected Slow, Medium, or Faster pace.'},
@@ -52,13 +52,15 @@ function renderCustomScriptEditors(){const wrap=$('#custom-script-editors');cons
 titlesEl.addEventListener('input',()=>{const n=titlesEl.value.split('\n').map(x=>x.trim()).filter(Boolean).length;$('#title-count').textContent=`${n} title${n===1?'':'s'}`;if($('#use-custom-script').checked)renderCustomScriptEditors()});
 $('#use-custom-script').addEventListener('change',event=>{const panel=$('#custom-scripts-panel');panel.classList.toggle('hidden',!event.target.checked);if(event.target.checked)renderCustomScriptEditors()});
 $('#generate').addEventListener('click',startBatch);$('#thumbnail-only').addEventListener('change',updateThumbnailOnlyMode);$('#stop-batch').addEventListener('click',stopBatch);$('#video-list').addEventListener('click',handleVideoAction);$('#refresh-batches').addEventListener('click',loadHistory);
-$('#help-button').addEventListener('click',()=>toast('See Settings for your OpenRouter model, stock-media keys, and export options.'));
+$('#help-button').addEventListener('click',()=>toast('See Settings to choose OpenRouter or Grok, configure its API key, and select a model.'));
 const openSettings=()=>{loadSettingsForm();$('#settings-dialog').showModal()};$('#settings-button').addEventListener('click',openSettings);$('#open-settings-link').addEventListener('click',event=>{event.preventDefault();openSettings()});
 $('#close-settings').addEventListener('click',()=>$('#settings-dialog').close());
 $('#cancel-settings').addEventListener('click',()=>$('#settings-dialog').close());
 $('#settings-dialog').addEventListener('click',event=>{if(event.target===$('#settings-dialog'))$('#settings-dialog').close()});
 $('#save-settings').addEventListener('click',saveSettingsForm);
-$('#refresh-openrouter-models').addEventListener('click',()=>loadOpenRouterModels($('#setting-openrouter-model').value,true));
+document.querySelectorAll('.provider-choice').forEach(button=>button.addEventListener('click',()=>changeTextProvider(button.dataset.textProvider)));
+$('#setting-text-model').addEventListener('change',()=>selectedTextModels[textProvider]=$('#setting-text-model').value);
+$('#refresh-text-models').addEventListener('click',()=>loadTextModels(textProvider,$('#setting-text-model').value,true));
 $('#youtube-credentials-file').addEventListener('change',uploadYoutubeCredentials);
 $('#connect-youtube').addEventListener('click',async()=>{const btn=$('#connect-youtube');btn.disabled=true;btn.textContent='Opening Google sign-in…';try{const r=await fetch('/api/youtube/auth',{method:'POST'});const d=await r.json();if(!r.ok)throw new Error(d.error||'Could not connect YouTube');toast('YouTube channel connected.');await loadYoutubeStatus()}catch(e){toast(e.message||'YouTube sign-in did not complete. Run the app locally and try again.')}finally{btn.disabled=false;btn.innerHTML='<i class="fa-brands fa-youtube"></i> Connect channel'}});
 function updateThumbnailOnlyMode(){const enabled=$('#thumbnail-only').checked;const autoUpload=$('#auto-upload');if(enabled)autoUpload.checked=false;autoUpload.disabled=enabled;$('#generate').querySelector('span:nth-child(2)').textContent=enabled?'Generate thumbnails':'Generate video batch'}
@@ -168,11 +170,98 @@ async function pollBatch(){
 function stepsLabel(steps){if(!steps)return'Processing';const names={script:'Script',images:'Visuals',clips:'Motion clips',audio:'Narration',assembly:'Scene assembly',subtitles:'Captions and SRT',music:'Music',encoding:'MP4 encoding',seo:'YouTube metadata',thumbnail:'Thumbnail',upload:'Upload',finalize:'Finishing'};const done=Object.keys(steps).filter(k=>['done','fallback','skipped'].includes(steps[k])).map(k=>names[k]||k);return done.length?`Completed: ${done.slice(-2).join(', ')}`:'Processing'}
 function escapeHtml(value){return String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 async function loadYoutubeStatus(){try{const r=await fetch('/api/youtube/status');const d=await r.json();$('#youtube-state').textContent=d.connected?'Connected':'Not connected';$('#youtube-dot').classList.toggle('green',d.connected);$('#youtube-detail').textContent=d.connected?`${d.uploads_today} of ${d.max_uploads_per_day} daily uploads used.`:(d.error||'Connect your channel to enable publishing.');$('#connect-youtube').innerHTML=d.connected?'<i class="fa-solid fa-check"></i> Channel connected':'<i class="fa-brands fa-youtube"></i> Connect channel'}catch(e){$('#youtube-state').textContent='Offline'}}
-function modelPriceLabel(model){if(model.free)return'FREE';if(model.input_price==null||model.output_price==null)return'pricing varies';const input=Number(model.input_price),output=Number(model.output_price);if(Number.isFinite(input)&&Number.isFinite(output))return`$${(input*1e6).toFixed(2)}/$${(output*1e6).toFixed(2)} per 1M in/out`;return'pricing varies'}
-async function loadOpenRouterModels(selected='',refresh=false){const select=$('#setting-openrouter-model'),status=$('#settings-openrouter-status'),previous=selected||select.value;if(refresh)status.textContent='Loading text models from OpenRouter…';try{const response=await fetch('/api/openrouter/models',{cache:refresh?'no-store':'default'}),data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load OpenRouter models');const models=Array.isArray(data.models)?data.models:[];select.replaceChildren();const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent=models.length?'Select a text model':'No text models are currently listed';select.append(placeholder);for(const model of models){const option=document.createElement('option');option.value=model.id;const context=model.context_length?` · ${Number(model.context_length).toLocaleString()} context`:'';option.textContent=`${model.name} · ${modelPriceLabel(model)}${context}`;select.append(option)}if(previous&&!models.some(model=>model.id===previous)){const option=document.createElement('option');option.value=previous;option.textContent=`${previous} · not currently listed`;select.append(option)}select.value=previous||models[0]?.id||'';status.textContent=models.length?`${models.length} text models loaded. The same selected model handles scripts, scene plans, SEO, and thumbnail copy. OpenRouter may charge for paid models.`:'OpenRouter returned no text models.'}catch(error){if(previous){select.replaceChildren();const option=document.createElement('option');option.value=previous;option.textContent=`${previous} · catalog unavailable`;select.append(option);select.value=previous}else{select.replaceChildren();const option=document.createElement('option');option.value='';option.textContent='Could not load text models';select.append(option)}status.textContent=error.message||'Could not load the OpenRouter model list.'}}
-async function loadSettingsForm(){try{const response=await fetch('/api/settings');const s=await response.json();if(!response.ok)throw new Error(s.error||'Could not load settings');$('#setting-openrouter-key').value='';$('#setting-openrouter-key').placeholder=s.OPENROUTER_API_KEY_CONFIGURED?'Key saved — leave blank to keep it':'Paste OpenRouter API key';$('#openrouter-configured').textContent=s.OPENROUTER_API_KEY_CONFIGURED?'Saved locally':'';$('#clear-openrouter-key').checked=false;loadOpenRouterModels(s.OPENROUTER_MODEL||'');$('#setting-pexels-key').value='';$('#setting-pexels-key').placeholder=s.PEXELS_API_KEY_CONFIGURED?'Key saved — leave blank to keep it':'Paste Pexels API key';$('#pexels-configured').textContent=s.PEXELS_API_KEY_CONFIGURED?'Saved locally':'';$('#clear-pexels-key').checked=false;$('#setting-pixabay-key').value='';$('#setting-pixabay-key').placeholder=s.PIXABAY_API_KEY_CONFIGURED?'Key saved — leave blank to keep it':'Paste Pixabay API key';$('#pixabay-configured').textContent=s.PIXABAY_API_KEY_CONFIGURED?'Saved locally':'';$('#clear-pixabay-key').checked=false;$('#setting-ffmpeg').value=s.FFMPEG_BINARY||'ffmpeg-imageio';$('#setting-voice').value=s.EDGE_TTS_VOICE||'en-US-AriaNeural';$('#setting-privacy').value=s.YOUTUBE_PRIVACY_STATUS||'private';$('#setting-category').value=s.YOUTUBE_CATEGORY_ID||'22';$('#setting-upload-limit').value=s.MAX_UPLOADS_PER_DAY||5;$('#setting-batch-delay').value=s.BATCH_DELAY_SECONDS??10;$('#setting-output-dir').value=s.OUTPUT_DIR||'';$('#youtube-credential-label').textContent=s.YOUTUBE_CREDENTIALS_CONFIGURED?'Google OAuth credentials are configured':'Google OAuth credentials not configured'}catch(e){toast(e.message||'Could not load app settings')}}
-async function saveSettingsForm(){const button=$('#save-settings');button.disabled=true;button.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Saving…';const payload={OPENROUTER_MODEL:$('#setting-openrouter-model').value,CLEAR_OPENROUTER_API_KEY:$('#clear-openrouter-key').checked,FFMPEG_BINARY:$('#setting-ffmpeg').value.trim(),EDGE_TTS_VOICE:$('#setting-voice').value,YOUTUBE_PRIVACY_STATUS:$('#setting-privacy').value,YOUTUBE_CATEGORY_ID:$('#setting-category').value.trim(),MAX_UPLOADS_PER_DAY:Number($('#setting-upload-limit').value),BATCH_DELAY_SECONDS:Number($('#setting-batch-delay').value),OUTPUT_DIR:$('#setting-output-dir').value.trim(),CLEAR_PEXELS_API_KEY:$('#clear-pexels-key').checked,CLEAR_PIXABAY_API_KEY:$('#clear-pixabay-key').checked};const key=$('#setting-pexels-key').value.trim();if(key)payload.PEXELS_API_KEY=key;const pixabayKey=$('#setting-pixabay-key').value.trim();if(pixabayKey)payload.PIXABAY_API_KEY=pixabayKey;const openrouterKey=$('#setting-openrouter-key').value.trim();if(openrouterKey)payload.OPENROUTER_API_KEY=openrouterKey;try{const response=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not save settings');$('#settings-dialog').close();$('#setting-pexels-key').value='';$('#setting-pixabay-key').value='';$('#setting-openrouter-key').value='';$('#setting-openrouter-key').placeholder=data.OPENROUTER_API_KEY_CONFIGURED?'Key saved — leave blank to keep it':'Paste OpenRouter API key';$('#openrouter-configured').textContent=data.OPENROUTER_API_KEY_CONFIGURED?'Saved locally':'';$('#clear-openrouter-key').checked=false;$('#clear-pexels-key').checked=false;$('#clear-pixabay-key').checked=false;$('#privacy').value=data.YOUTUBE_PRIVACY_STATUS||'private';await loadYoutubeStatus();toast('Settings saved on this PC.')}catch(e){toast(e.message||'Could not save settings')}finally{button.disabled=false;button.innerHTML='<i class="fa-solid fa-check"></i> Save settings'}}
+function modelPriceLabel(model,provider){
+ if(model.free)return'FREE';
+ if(provider==='grok')return'xAI API';
+ if(model.input_price==null||model.output_price==null)return'pricing varies';
+ const input=Number(model.input_price),output=Number(model.output_price);
+ if(Number.isFinite(input)&&Number.isFinite(output))return`$${(input*1e6).toFixed(2)}/$${(output*1e6).toFixed(2)} per 1M in/out`;
+ return'pricing varies'
+}
+function applyTextProvider(provider){
+ textProvider=provider==='grok'?'grok':'openrouter';
+ document.querySelectorAll('.provider-choice').forEach(button=>{
+  const active=button.dataset.textProvider===textProvider;
+  button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));
+ });
+ $('#provider-openrouter-panel').hidden=textProvider!=='openrouter';
+ $('#provider-grok-panel').hidden=textProvider!=='grok';
+ $('#active-text-provider').textContent=textProvider==='grok'?'Grok AI':'OpenRouter AI';
+}
+function changeTextProvider(provider){
+ selectedTextModels[textProvider]=$('#setting-text-model').value;
+ applyTextProvider(provider);
+ return loadTextModels(textProvider,selectedTextModels[textProvider]||'',false);
+}
+async function loadTextModels(provider=textProvider,selected='',refresh=false){
+ const select=$('#setting-text-model'),status=$('#settings-text-status');
+ const requestToken=++modelLoadToken;
+ if(refresh)status.textContent=`Loading ${provider==='grok'?'Grok':'free OpenRouter'} models…`;
+ try{
+  const query=new URLSearchParams({provider});if(refresh)query.set('refresh','1');
+  const response=await fetch(`/api/text/models?${query.toString()}`,{cache:refresh?'no-store':'default'});
+  const data=await response.json();if(!response.ok)throw new Error(data.error||`Could not load ${provider} models`);
+  if(requestToken!==modelLoadToken||provider!==textProvider)return;
+  const models=Array.isArray(data.models)?data.models:[];
+  select.replaceChildren();
+  const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent=models.length?'Select a model':'No models are currently listed';select.append(placeholder);
+  for(const model of models){
+   const option=document.createElement('option');option.value=model.id;
+   const context=model.context_length?` · ${Number(model.context_length).toLocaleString()} context`:'';
+   option.textContent=`${model.name} · ${modelPriceLabel(model,provider)}${context}`;select.append(option)
+  }
+  const selectedAvailable=models.some(model=>model.id===selected);
+  select.value=selectedAvailable?selected:(models[0]?.id||'');
+  selectedTextModels[provider]=select.value;
+  if(data.notice)status.textContent=data.notice;
+  else if(provider==='openrouter')status.textContent=models.length?'Only free OpenRouter text models are listed. Choose one and save your settings.':'OpenRouter returned no free text models.';
+  else status.textContent=models.length?'Grok models come from the xAI API and may incur xAI usage charges.':'No Grok text models were returned.';
+  if(selected&&!selectedAvailable&&models.length)status.textContent=`Your previous model is not in this provider's current list; choose a listed model and save. ${status.textContent}`
+ }catch(error){
+  if(requestToken!==modelLoadToken||provider!==textProvider)return;
+  select.replaceChildren();
+  if(provider==='grok'){
+   for(const model of ['grok-4-fast','grok-4','grok-3-mini','grok-3']){const option=document.createElement('option');option.value=model;option.textContent=`${model} · xAI API`;select.append(option)}
+   select.value=selected&&[...select.options].some(option=>option.value===selected)?selected:'grok-4-fast';selectedTextModels[provider]=select.value;
+  }else if(selected){const option=document.createElement('option');option.value=selected;option.textContent=`${selected} · catalog unavailable`;select.append(option);select.value=selected;selectedTextModels[provider]=selected}
+  else{const option=document.createElement('option');option.value='';option.textContent='Could not load models';select.append(option)}
+  status.textContent=error.message||`Could not load ${provider} models.`
+ }
+}
+async function loadSettingsForm(){
+ try{
+  const response=await fetch('/api/settings'),s=await response.json();if(!response.ok)throw new Error(s.error||'Could not load settings');
+  textProvider=s.TEXT_PROVIDER==='grok'?'grok':'openrouter';selectedTextModels.openrouter='';selectedTextModels.grok='';selectedTextModels[textProvider]=s.TEXT_MODEL||'';applyTextProvider(textProvider);
+  $('#setting-openrouter-key').value='';$('#setting-openrouter-key').placeholder=s.OPENROUTER_API_KEY_CONFIGURED?'Key saved — leave blank to keep it':'Paste OpenRouter API key';$('#openrouter-configured').textContent=s.OPENROUTER_API_KEY_CONFIGURED?'Saved locally':'';$('#clear-openrouter-key').checked=false;
+  $('#setting-grok-key').value='';$('#setting-grok-key').placeholder=s.GROK_API_KEY_CONFIGURED?'Key saved — leave blank to keep it':'Paste Grok (xAI) API key';$('#grok-configured').textContent=s.GROK_API_KEY_CONFIGURED?'Saved locally':'';$('#clear-grok-key').checked=false;
+  loadTextModels(textProvider,s.TEXT_MODEL||'');
+  $('#setting-pexels-key').value='';$('#setting-pexels-key').placeholder=s.PEXELS_API_KEY_CONFIGURED?'Key saved — leave blank to keep it':'Paste Pexels API key';$('#pexels-configured').textContent=s.PEXELS_API_KEY_CONFIGURED?'Saved locally':'';$('#clear-pexels-key').checked=false;
+  $('#setting-pixabay-key').value='';$('#setting-pixabay-key').placeholder=s.PIXABAY_API_KEY_CONFIGURED?'Key saved — leave blank to keep it':'Paste Pixabay API key';$('#pixabay-configured').textContent=s.PIXABAY_API_KEY_CONFIGURED?'Saved locally':'';$('#clear-pixabay-key').checked=false;
+  $('#setting-ffmpeg').value=s.FFMPEG_BINARY||'ffmpeg-imageio';$('#setting-voice').value=s.EDGE_TTS_VOICE||'en-US-AriaNeural';$('#setting-privacy').value=s.YOUTUBE_PRIVACY_STATUS||'private';$('#setting-category').value=s.YOUTUBE_CATEGORY_ID||'22';$('#setting-upload-limit').value=s.MAX_UPLOADS_PER_DAY||5;$('#setting-batch-delay').value=s.BATCH_DELAY_SECONDS??10;$('#setting-output-dir').value=s.OUTPUT_DIR||'';$('#youtube-credential-label').textContent=s.YOUTUBE_CREDENTIALS_CONFIGURED?'Google OAuth credentials are configured':'Google OAuth credentials not configured'
+ }catch(error){toast(error.message||'Could not load app settings')}
+}
+async function saveSettingsForm(){
+ const button=$('#save-settings');button.disabled=true;button.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Saving…';
+ const selectedModel=$('#setting-text-model').value;
+ if(!selectedModel){toast('Choose a model for the selected provider before saving.');button.disabled=false;button.innerHTML='<i class="fa-solid fa-check"></i> Save settings';return}
+ const payload={TEXT_PROVIDER:textProvider,TEXT_MODEL:selectedModel,CLEAR_OPENROUTER_API_KEY:$('#clear-openrouter-key').checked,CLEAR_GROK_API_KEY:$('#clear-grok-key').checked,FFMPEG_BINARY:$('#setting-ffmpeg').value.trim(),EDGE_TTS_VOICE:$('#setting-voice').value,YOUTUBE_PRIVACY_STATUS:$('#setting-privacy').value,YOUTUBE_CATEGORY_ID:$('#setting-category').value.trim(),MAX_UPLOADS_PER_DAY:Number($('#setting-upload-limit').value),BATCH_DELAY_SECONDS:Number($('#setting-batch-delay').value),OUTPUT_DIR:$('#setting-output-dir').value.trim(),CLEAR_PEXELS_API_KEY:$('#clear-pexels-key').checked,CLEAR_PIXABAY_API_KEY:$('#clear-pixabay-key').checked};
+ const key=$('#setting-pexels-key').value.trim();if(key)payload.PEXELS_API_KEY=key;
+ const pixabayKey=$('#setting-pixabay-key').value.trim();if(pixabayKey)payload.PIXABAY_API_KEY=pixabayKey;
+ const openrouterKey=$('#setting-openrouter-key').value.trim();if(openrouterKey)payload.OPENROUTER_API_KEY=openrouterKey;
+ const grokKey=$('#setting-grok-key').value.trim();if(grokKey)payload.GROK_API_KEY=grokKey;
+ try{
+  const response=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),data=await response.json();if(!response.ok)throw new Error(data.error||'Could not save settings');
+  selectedTextModels[textProvider]=data.TEXT_MODEL||selectedModel;$('#active-text-provider').textContent=textProvider==='grok'?'Grok AI':'OpenRouter AI';
+  $('#setting-pexels-key').value='';$('#setting-pixabay-key').value='';$('#setting-openrouter-key').value='';$('#setting-grok-key').value='';
+  $('#setting-openrouter-key').placeholder=data.OPENROUTER_API_KEY_CONFIGURED?'Key saved — leave blank to keep it':'Paste OpenRouter API key';$('#openrouter-configured').textContent=data.OPENROUTER_API_KEY_CONFIGURED?'Saved locally':'';
+  $('#setting-grok-key').placeholder=data.GROK_API_KEY_CONFIGURED?'Key saved — leave blank to keep it':'Paste Grok (xAI) API key';$('#grok-configured').textContent=data.GROK_API_KEY_CONFIGURED?'Saved locally':'';
+  $('#pexels-configured').textContent=data.PEXELS_API_KEY_CONFIGURED?'Saved locally':'';$('#pixabay-configured').textContent=data.PIXABAY_API_KEY_CONFIGURED?'Saved locally':'';
+  $('#clear-openrouter-key').checked=false;$('#clear-grok-key').checked=false;$('#clear-pexels-key').checked=false;$('#clear-pixabay-key').checked=false;$('#privacy').value=data.YOUTUBE_PRIVACY_STATUS||'private';
+  $('#settings-dialog').close();await loadYoutubeStatus();toast('Settings saved on this PC.')
+ }catch(error){toast(error.message||'Could not save app settings')}
+ finally{button.disabled=false;button.innerHTML='<i class="fa-solid fa-check"></i> Save settings'}
+}
 async function uploadYoutubeCredentials(){const input=$('#youtube-credentials-file');const file=input.files&&input.files[0];if(!file)return;const label=$('#youtube-credential-label');label.textContent='Saving OAuth credentials…';try{const form=new FormData();form.append('file',file);const r=await fetch('/api/youtube/credentials',{method:'POST',body:form});const d=await r.json();if(!r.ok)throw new Error(d.error||'Could not save credentials');label.textContent='Google OAuth credentials are configured';await loadYoutubeStatus();toast('Google OAuth credentials saved locally.')}catch(e){label.textContent=e.message;toast(e.message)}finally{input.value=''}}
 async function loadHistory(){try{const r=await fetch('/api/batch/list');const d=await r.json();const list=d.batches||[];$('#queue-count').textContent=list.filter(x=>x.status==='running'||x.status==='queued'||x.status==='stopping').length;if(!list.length){$('#batch-history').innerHTML='<div class="empty-history"><span><i class="fa-regular fa-folder-open"></i></span><b>Your workspace is ready</b><small>Created batches will show up here.</small></div>';return}$('#batch-history').innerHTML=list.slice(0,5).map(b=>`<div class="history-card"><div><b>${b.total} video${b.total===1?'':'s'} · ${escapeHtml(b.batch_id)}</b><small>${new Date(b.created_at).toLocaleString()} · ${b.completed}/${b.total} processed</small></div><span class="history-state">${escapeHtml(b.status.toUpperCase())}</span></div>`).join('')}catch(e){}}
-async function loadSavedDefaults(){try{const r=await fetch('/api/settings');const s=await r.json();if(s.YOUTUBE_PRIVACY_STATUS)$('#privacy').value=s.YOUTUBE_PRIVACY_STATUS}catch(e){}}
+async function loadSavedDefaults(){try{const r=await fetch('/api/settings');const s=await r.json();if(s.YOUTUBE_PRIVACY_STATUS)$('#privacy').value=s.YOUTUBE_PRIVACY_STATUS;if(s.TEXT_PROVIDER)$('#active-text-provider').textContent=s.TEXT_PROVIDER==='grok'?'Grok AI':'OpenRouter AI'}catch(e){}}
 loadYoutubeStatus();loadHistory();loadSavedDefaults();

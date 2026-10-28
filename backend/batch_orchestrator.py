@@ -224,10 +224,11 @@ class BatchOrchestrator:
         retry_position=step_position.get(retry_from,0)
         should_run=lambda step: retry_from is None or step_position[step]>=retry_position
         report=lambda pct,stage,message,step_updates=None:self._update_video_progress(batch_id,index,pct,stage,message,step_updates)
-        model_name=getattr(self.scripts,"openrouter_model","") or "selected model"
+        model_name=getattr(self.scripts,"model","") or "selected model"
+        provider_name=getattr(self.scripts,"provider_name","selected provider")
         if should_run("script") or not script:
-            if custom_script is not None:script_message=f"Sending your draft to OpenRouter {model_name} for editing and scene planning…"
-            else:script_message=f"Asking OpenRouter {model_name} to write and review the narration and scene plan…"
+            if custom_script is not None:script_message=f"Sending your draft to {provider_name} {model_name} for editing and scene planning…"
+            else:script_message=f"Asking {provider_name} {model_name} to write and review the narration and scene plan…"
             report(1,"script",script_message)
             try:
                 self._check_cancel(batch_id)
@@ -338,7 +339,7 @@ class BatchOrchestrator:
             skipped_updates={key:"skipped" for key in ("audio","assembly","subtitles","music","encoding","upload")}
             for key,state in skipped_updates.items():steps[key]=state
             if should_run("seo"):
-                report(50,"seo",f"Retrying OpenRouter metadata generation with {self.seo.model or 'text model'}…",skipped_updates if should_run("audio") else None)
+                report(50,"seo",f"Retrying {self.seo.provider_name} metadata generation with {self.seo.model or 'text model'}…",skipped_updates if should_run("audio") else None)
                 try:
                     seo=self.seo.generate_seo_package(title,script,niche)
                     self._check_cancel(batch_id)
@@ -375,7 +376,7 @@ class BatchOrchestrator:
         if thumbnail_only:
             skipped_updates={key:"skipped" for key in ("audio","assembly","subtitles","music","encoding","upload")}
             for key,state in skipped_updates.items():steps[key]=state
-            seo_message=f"Asking OpenRouter {self.seo.model or 'text model'} to prepare thumbnail wording…"
+            seo_message=f"Asking {self.seo.provider_name} {self.seo.model or 'text model'} to prepare thumbnail wording…"
             report(50,"seo",seo_message+" Video rendering is disabled for this batch.",skipped_updates)
             try:
                 seo=self.seo.generate_seo_package(title,script,niche)
@@ -463,7 +464,7 @@ class BatchOrchestrator:
         video_path=result.get("video_path")
         self._check_cancel(batch_id)
         if should_run("seo"):
-            seo_message=f"Asking OpenRouter {self.seo.model or 'text model'} to prepare title, description and tags…"
+            seo_message=f"Asking {self.seo.provider_name} {self.seo.model or 'text model'} to prepare title, description and tags…"
             report(83,"seo",seo_message)
             try:
                 seo=self.seo.generate_seo_package(title,script,niche)

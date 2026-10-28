@@ -24,12 +24,14 @@ app.config["MAX_CONTENT_LENGTH"]=100*1024*1024
 orchestrator=BatchOrchestrator()
 FRONTEND=ROOT_DIR/"frontend"
 _OPENROUTER_MODELS_CACHE={"loaded_at":0.0,"models":[]}
+_GROK_MODELS_CACHE={"loaded_at":0.0,"key_digest":"","models":[]}
+_GROK_FALLBACK_MODELS=("grok-4-fast","grok-4","grok-3-mini","grok-3")
 
-def _openrouter_models():
-    """Return text-output models available through OpenRouter, cached for Settings."""
+def _openrouter_models(refresh=False):
+    """Return only free, text-output models available through OpenRouter."""
     now=time.time()
     cached=_OPENROUTER_MODELS_CACHE
-    if cached["models"] and now-cached["loaded_at"]<600:
+    if not refresh and cached["models"] and now-cached["loaded_at"]<600:
         return cached["models"]
     response=requests.get(
         "https://openrouter.ai/api/v1/models",
@@ -52,19 +54,61 @@ def _openrouter_models():
         if isinstance(modalities,list) and "text" not in {str(value).lower() for value in modalities}:
             continue
         pricing=item.get("pricing") if isinstance(item.get("pricing"),dict) else {}
+        free_id=model_id.endswith(":free") or model_id=="openrouter/free"
+        try:
+            free_pricing=float(pricing.get("prompt"))==0 and float(pricing.get("completion"))==0
+        except (TypeError,ValueError):
+            free_pricing=False
+        if not (free_id or free_pricing):
+            continue
         models.append({
             "id":model_id,
             "name":str(item.get("name") or model_id),
             "context_length":item.get("context_length"),
             "input_price":pricing.get("prompt"),
             "output_price":pricing.get("completion"),
-            "free":model_id.endswith(":free") or model_id=="openrouter/free",
+            "free":True,
         })
     models.sort(key=lambda item:(item["name"].lower(),item["id"].lower()))
     if not models:
-        raise ValueError("OpenRouter returned no text-generation models.")
+        raise ValueError("OpenRouter currently returned no free text-generation models.")
     cached.update(loaded_at=now,models=models)
     return models
+
+def _grok_models(refresh=False):
+    """Load text models from xAI when a Grok key is saved; offer safe defaults before that."""
+    api_key=load_settings().get("GROK_API_KEY","").strip()
+    fallback=[{"id":model,"name":model,"free":False} for model in _GROK_FALLBACK_MODELS]
+    if not api_key:
+        return fallback,"Save your xAI API key to load the current Grok model catalog. Grok usage may be billed by xAI."
+    import hashlib
+    key_digest=hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+    cached=_GROK_MODELS_CACHE
+    now=time.time()
+    if not refresh and cached["models"] and cached["key_digest"]==key_digest and now-cached["loaded_at"]<600:
+        return cached["models"],None
+    response=requests.get(
+        "https://api.x.ai/v1/models",
+        headers={"Authorization":f"Bearer {api_key}","Accept":"application/json"},
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload=response.json()
+    if not isinstance(payload,dict) or not isinstance(payload.get("data"),list):
+        raise ValueError("xAI returned an invalid model catalog response.")
+    models=[]
+    for item in payload["data"]:
+        if not isinstance(item,dict):
+            continue
+        model_id=str(item.get("id") or "").strip()
+        if not model_id or "grok" not in model_id.lower() or any(term in model_id.lower() for term in ("embedding","image","vision")):
+            continue
+        models.append({"id":model_id,"name":str(item.get("name") or model_id),"free":False})
+    if not models:
+        raise ValueError("xAI returned no Grok text-generation models.")
+    models.sort(key=lambda item:(item["name"].lower(),item["id"].lower()))
+    cached.update(loaded_at=now,key_digest=key_digest,models=models)
+    return models,None
 
 def _apply_runtime_settings(settings):
     apply_environment(settings)
@@ -74,10 +118,12 @@ def _apply_runtime_settings(settings):
     common.DIRS.clear()
     common.DIRS.update({name: output_dir/name for name in ("images", "audio", "videos", "clips", "thumbnails", "uploads", "batch")})
     for directory in common.DIRS.values(): directory.mkdir(parents=True, exist_ok=True)
-    orchestrator.scripts.openrouter_api_key=os.getenv("OPENROUTER_API_KEY", "").strip()
-    orchestrator.scripts.openrouter_model=os.getenv("OPENROUTER_MODEL", "").strip()
-    orchestrator.seo.api_key=orchestrator.scripts.openrouter_api_key
-    orchestrator.seo.model=orchestrator.scripts.openrouter_model
+    provider=str(settings.get("TEXT_PROVIDER") or "openrouter").lower()
+    model=str(settings.get("TEXT_MODEL") or settings.get("OPENROUTER_MODEL") or "").strip()
+    openrouter_key=os.getenv("OPENROUTER_API_KEY", "").strip()
+    grok_key=os.getenv("GROK_API_KEY", "").strip()
+    orchestrator.scripts.configure(provider,model,openrouter_key,grok_key)
+    orchestrator.seo.configure(provider,model,openrouter_key,grok_key)
     orchestrator.images.api_key=os.getenv("PEXELS_API_KEY", "").strip()
     orchestrator.images.pixabay.set_api_key(os.getenv("PIXABAY_API_KEY", "").strip())
     orchestrator.fetcher.api_key=orchestrator.images.api_key
@@ -98,8 +144,11 @@ def create_batch():
     if not isinstance(titles,list):return jsonify({"error":"titles must be a list of titles"}),400
     titles=[str(t).strip()[:200] for t in titles if str(t).strip()]
     if not titles:return jsonify({"error":"Enter at least one video title."}),400
-    if not os.getenv("OPENROUTER_API_KEY", "").strip():return jsonify({"error":"Add your OpenRouter API key in Settings before generating videos."}),400
-    if not os.getenv("OPENROUTER_MODEL", "").strip():return jsonify({"error":"Choose an OpenRouter text model in Settings before generating videos."}),400
+    provider=str(os.getenv("TEXT_PROVIDER","openrouter")).strip().lower()
+    provider_name="Grok (xAI)" if provider=="grok" else "OpenRouter"
+    api_key=os.getenv("GROK_API_KEY","").strip() if provider=="grok" else os.getenv("OPENROUTER_API_KEY","").strip()
+    if not api_key:return jsonify({"error":f"Add your {provider_name} API key in Settings before generating videos."}),400
+    if not os.getenv("TEXT_MODEL","").strip():return jsonify({"error":f"Choose a {provider_name} text model in Settings before generating videos."}),400
     if len(titles)>30:return jsonify({"error":"A batch can contain at most 30 titles."}),400
     custom_scripts=body.get("custom_scripts")
     if custom_scripts is not None:
@@ -178,12 +227,22 @@ def get_thumbnail(batch_id,index):
     if not path or not Path(path).is_file():return jsonify({"error":"Thumbnail is not ready"}),404
     return send_file(path,as_attachment=True,download_name=Path(path).name,mimetype="image/jpeg")
 
-@app.get("/api/openrouter/models")
-def openrouter_models():
-    try:
-        return jsonify({"models":_openrouter_models()})
-    except (requests.RequestException,ValueError,TypeError) as exc:
-        return jsonify({"error":f"Could not load OpenRouter text models: {exc}"}),502
+@app.get("/api/text/models")
+def text_models():
+    provider=str(request.args.get("provider","openrouter")).strip().lower()
+    if provider=="openrouter":
+        try:
+            return jsonify({"models":_openrouter_models(request.args.get("refresh")=="1"),"provider":provider,"free_only":True})
+        except (requests.RequestException,ValueError,TypeError) as exc:
+            return jsonify({"error":f"Could not load free OpenRouter text models: {exc}"}),502
+    if provider=="grok":
+        try:
+            models,notice=_grok_models(request.args.get("refresh")=="1")
+            return jsonify({"models":models,"provider":provider,"free_only":False,"notice":notice})
+        except (requests.RequestException,ValueError,TypeError) as exc:
+            fallback=[{"id":model,"name":model,"free":False} for model in _GROK_FALLBACK_MODELS]
+            return jsonify({"models":fallback,"provider":provider,"free_only":False,"notice":f"The live xAI catalog could not be loaded ({exc}); showing fallback model choices. Check your xAI key and connection."})
+    return jsonify({"error":"Choose OpenRouter or Grok as the text provider."}),400
 
 @app.get("/api/settings")
 def get_settings():
@@ -192,7 +251,7 @@ def get_settings():
 @app.post("/api/settings")
 def update_settings():
     body=request.get_json(silent=True) or {}
-    allowed=set(public_settings())-{"PEXELS_API_KEY_CONFIGURED", "PIXABAY_API_KEY_CONFIGURED", "OPENROUTER_API_KEY_CONFIGURED", "YOUTUBE_CREDENTIALS_CONFIGURED"}
+    allowed=set(public_settings())-{"PEXELS_API_KEY_CONFIGURED", "PIXABAY_API_KEY_CONFIGURED", "OPENROUTER_API_KEY_CONFIGURED", "GROK_API_KEY_CONFIGURED", "YOUTUBE_CREDENTIALS_CONFIGURED"}
     updates={key:value for key,value in body.items() if key in allowed}
     if body.get("PEXELS_API_KEY"):
         updates["PEXELS_API_KEY"]=str(body["PEXELS_API_KEY"]).strip()
@@ -206,6 +265,10 @@ def update_settings():
         updates["OPENROUTER_API_KEY"]=str(body["OPENROUTER_API_KEY"]).strip()
     elif body.get("CLEAR_OPENROUTER_API_KEY"):
         updates["OPENROUTER_API_KEY"]=""
+    if body.get("GROK_API_KEY"):
+        updates["GROK_API_KEY"]=str(body["GROK_API_KEY"]).strip()
+    elif body.get("CLEAR_GROK_API_KEY"):
+        updates["GROK_API_KEY"]=""
     try:
         settings=save_settings(updates)
         _apply_runtime_settings(settings)
@@ -238,6 +301,6 @@ def health():return jsonify({"ok":True,"service":"CreatorFlow Web App"})
 
 if __name__=="__main__":
     print("YouTube Auto Creator starting on http://localhost:5000")
-    print("Text generation: OpenRouter hosted model")
+    print(f"Text generation: {orchestrator.scripts.provider_name} {orchestrator.scripts.model or '(model not selected)'}")
     print("YouTube:","connected" if orchestrator.youtube.status()["connected"] else "not configured")
     app.run(host="0.0.0.0",port=int(os.getenv("PORT","5000")),debug=False,threaded=True)
