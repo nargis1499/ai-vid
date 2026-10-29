@@ -228,7 +228,7 @@ class BatchOrchestrator:
         provider_name=getattr(self.scripts,"provider_name","selected provider")
         if should_run("script") or not script:
             if custom_script is not None:script_message=f"Sending your draft to {provider_name} {model_name} for editing and scene planning…"
-            else:script_message=f"Asking {provider_name} {model_name} to write and review the narration and scene plan…"
+            else:script_message=f"Asking {provider_name} {model_name} to generate the final narration and scene plan…"
             report(1,"script",script_message)
             try:
                 self._check_cancel(batch_id)
