@@ -4,14 +4,17 @@ import os
 import re
 import threading
 from pathlib import Path
+from urllib.parse import quote
 
 import requests
 
 from settings_store import APP_DATA_DIR, load_settings
 
 MODEL_ID = "qwen3-1.7b-q4_k_m"
+MODEL_REPO = "Qwen/Qwen3-1.7B-GGUF"
 MODEL_FILENAME = "Qwen3-1.7B-Q4_K_M.gguf"
-MODEL_URL = f"https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main/{MODEL_FILENAME}?download=true"
+MODEL_FILES_API = f"https://huggingface.co/api/models/{MODEL_REPO}?blobs=true"
+
 DEFAULT_MODEL_PATH = APP_DATA_DIR / "models" / MODEL_FILENAME
 
 _download_lock = threading.RLock()
@@ -32,6 +35,29 @@ def _has_gguf_header(path: Path) -> bool:
             return model_file.read(4) == b"GGUF"
     except OSError:
         return False
+
+
+def _resolve_model_url() -> str:
+    """Resolve the requested quantization from the repository manifest, not a guessed filename."""
+    try:
+        response = requests.get(
+            MODEL_FILES_API,
+            headers={"Accept": "application/json", "User-Agent": "CreatorFlow local-model downloader"},
+            timeout=(20, 60),
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        raise RuntimeError(f"Could not read the Qwen model file catalog from Hugging Face: {exc}") from exc
+    siblings = payload.get("siblings") if isinstance(payload, dict) else None
+    files = [str(item.get("rfilename") or "") for item in siblings or [] if isinstance(item, dict)]
+    matches = [name for name in files if name.lower().endswith("q4_k_m.gguf")]
+    if not matches:
+        available = [name for name in files if name.lower().endswith(".gguf")]
+        choices = ", ".join(available[:8]) if available else "none listed"
+        raise RuntimeError(f"The Hugging Face repository {MODEL_REPO} does not list a Q4_K_M GGUF file. Available GGUF files: {choices}.")
+    selected = next((name for name in matches if name.rsplit("/", 1)[-1].casefold() == MODEL_FILENAME.casefold()), matches[0])
+    return f"https://huggingface.co/{MODEL_REPO}/resolve/main/{quote(selected, safe='/')}"
 
 
 def runtime_status() -> dict:
@@ -81,7 +107,8 @@ def _download_model(path: Path) -> None:
         headers = {"User-Agent": "CreatorFlow local-model downloader"}
         if existing:
             headers["Range"] = f"bytes={existing}-"
-        with requests.get(MODEL_URL, headers=headers, stream=True, timeout=(20, 120), allow_redirects=True) as response:
+        model_url = _resolve_model_url()
+        with requests.get(model_url, headers=headers, stream=True, timeout=(20, 120), allow_redirects=True) as response:
             if existing and response.status_code == 206:
                 mode = "ab"
                 downloaded = existing
