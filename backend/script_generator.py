@@ -61,7 +61,7 @@ class ScriptGenerator:
         )
         return content
 
-    def generate_script(self, title: str, duration: int) -> dict:
+    def generate_script(self, title: str, duration: int, progress_callback=None) -> dict:
         """Generate final narration, then plan its scene visuals separately."""
         duration = max(1, int(duration))
         scene_count = max(1, min(24, duration // 10))
@@ -82,7 +82,7 @@ class ScriptGenerator:
                 f"({type(exc).__name__}: {exc}). Try again or choose another text model."
             ) from exc
         script_source = self.last_completion_source
-        visual_source = self._plan_scene_visuals(script["scenes"], title)
+        visual_source = self._plan_scene_visuals(script["scenes"], title, progress_callback=progress_callback)
         self.last_source = f"{script_source}; visual planner: {visual_source}"
         return script
 
@@ -124,8 +124,48 @@ class ScriptGenerator:
             if len(valid_queries) < 3:
                 raise ValueError(f"Visual plan {plan.get('scene_id')} needs at least three concrete, distinct queries.")
 
-    def _plan_scene_visuals(self, scenes, title):
+    @staticmethod
+    def _planning_preview(scenes, phase, message, source=None):
+        preview_scenes = []
+        for index, scene in enumerate(scenes, 1):
+            plan = scene.get("visual_plan") if isinstance(scene.get("visual_plan"), dict) else {}
+            preview_scenes.append({
+                "scene_number": int(scene.get("scene_number") or index),
+                "duration": int(scene.get("duration") or 0),
+                "narration": str(scene.get("narration") or "")[:700],
+                "core_meaning": str(plan.get("core_meaning") or "")[:240],
+                "visual_objective": str(plan.get("visual_objective") or "")[:240],
+                "visible_action": str(plan.get("visible_action") or "")[:180],
+                "subjects": [str(value)[:100] for value in (plan.get("subjects") or [])[:5]],
+                "setting": str(plan.get("setting") or "")[:160],
+                "primary_query": str(plan.get("primary_query") or "")[:100],
+                "alternative_queries": [str(value)[:100] for value in (plan.get("alternative_queries") or [])[:4]],
+                "avoid_terms": [str(value)[:80] for value in (plan.get("avoid_terms") or [])[:8]],
+            })
+        return {
+            "phase": phase,
+            "message": str(message or "")[:300],
+            "source": str(source or "")[:180],
+            "scene_count": len(preview_scenes),
+            "scenes": preview_scenes,
+        }
+
+    @staticmethod
+    def _send_progress_preview(progress_callback, payload):
+        if not progress_callback:
+            return
+        try:
+            progress_callback(payload)
+        except Exception:
+            # Progress display must never interrupt script generation.
+            pass
+
+    def _plan_scene_visuals(self, scenes, title, progress_callback=None):
         """Plan visuals from immutable final narration, then mirror queries to legacy fields."""
+        self._send_progress_preview(progress_callback, self._planning_preview(
+            scenes, "visual_planning",
+            f"Narration is ready; the visual planner is matching actions and footage queries across {len(scenes)} scene(s).",
+        ))
         scene_refs = [
             {"scene_id": f"scene-{index:02d}", "original_narration": str(scene.get("narration") or ""), "target_duration": int(scene.get("duration") or 0)}
             for index, scene in enumerate(scenes, 1)
@@ -158,6 +198,12 @@ SCENES: {json.dumps(scene_refs, ensure_ascii=False)}'''
             scene["visual_description"] = plan["visual_objective"]
             scene["search_keywords"] = " ".join((plan["subjects"][:2] + [plan["visible_action"]])[:3]).strip()
             scene["search_queries"] = [plan["primary_query"], *plan["alternative_queries"]]
+        phase = "fallback" if source.startswith("structured-plan fallback") else "planned"
+        self._send_progress_preview(progress_callback, self._planning_preview(
+            scenes, phase,
+            "Visual plans and stock-footage queries are ready." if phase == "planned" else "The visual planner used its built-in scene fallback; review these queries before rendering.",
+            source=source,
+        ))
         return source
 
     @staticmethod
@@ -268,7 +314,7 @@ SCENES: {json.dumps(scene_refs, ensure_ascii=False)}'''
             "target_duration": max(1, int(scene.get("duration") or raw_plan.get("target_duration") or 1)),
         }
 
-    def generate_custom_script(self, title: str, custom_text: str, duration: int) -> dict:
+    def generate_custom_script(self, title: str, custom_text: str, duration: int, progress_callback=None) -> dict:
         """Use the selected hosted model to edit a custom draft and plan its scenes."""
         text = str(custom_text or "").strip()
         if not text:
@@ -280,9 +326,15 @@ SCENES: {json.dumps(scene_refs, ensure_ascii=False)}'''
             "target_duration_seconds": int(duration),
             "custom_script": text,
         }, ensure_ascii=False)
+        self._send_progress_preview(progress_callback, {
+            "phase": "draft_review",
+            "message": "The selected model is editing your submitted draft; final narration and visual plans will appear after its response.",
+            "scene_count": 0,
+            "scenes": [],
+        })
         reviewed = self._review_draft(title, source, duration, source_label="custom script")
         review_source = self.last_completion_source
-        visual_source = self._plan_scene_visuals(reviewed["scenes"], title)
+        visual_source = self._plan_scene_visuals(reviewed["scenes"], title, progress_callback=progress_callback)
         self.last_source = f"{review_source} (custom draft review); visual planner: {visual_source}"
         return reviewed
 

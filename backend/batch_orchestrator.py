@@ -69,7 +69,7 @@ class BatchOrchestrator:
         with self.lock:return [dict(v) for v in sorted(self.batches.values(),key=lambda x:x["created_at"],reverse=True)]
     def _set(self,batch_id,**kwargs):
         with self.lock:self.batches[batch_id].update(kwargs)
-    def _update_video_progress(self,batch_id,index,progress,stage,message,step_updates=None):
+    def _update_video_progress(self,batch_id,index,progress,stage,message,step_updates=None,planning_preview=None):
         progress=max(0,min(100,int(progress)))
         with self.lock:
             batch=self.batches.get(batch_id)
@@ -86,6 +86,8 @@ class BatchOrchestrator:
                     steps[key]=value
                     if value=="skipped":messages[key]="Skipped because only thumbnails were requested." if batch.get("thumbnail_only") else message
             video.update(progress=progress,current_stage=stage,progress_message=message,steps=steps,step_messages=messages)
+            if planning_preview is not None:
+                video["planning_preview"]=copy.deepcopy(planning_preview)
             if stage=="upload":
                 video.update(upload_status="uploading",upload_progress=0,upload_error=None,upload_message=message)
             batch["progress"]=round(100*(batch["completed"]+progress/100)/max(1,batch["total"]))
@@ -223,19 +225,23 @@ class BatchOrchestrator:
         step_position={name:i for i,name in enumerate(VIDEO_STEP_KEYS)}
         retry_position=step_position.get(retry_from,0)
         should_run=lambda step: retry_from is None or step_position[step]>=retry_position
-        report=lambda pct,stage,message,step_updates=None:self._update_video_progress(batch_id,index,pct,stage,message,step_updates)
+        report=lambda pct,stage,message,step_updates=None,preview=None:self._update_video_progress(batch_id,index,pct,stage,message,step_updates,planning_preview=preview)
         model_name=getattr(self.scripts,"model","") or "selected model"
         provider_name=getattr(self.scripts,"provider_name","selected provider")
         if should_run("script") or not script:
-            if custom_script is not None:script_message=f"Sending your draft to {provider_name} {model_name} for editing and scene planning…"
-            else:script_message=f"Asking {provider_name} {model_name} to generate the final narration and scene plan…"
-            report(1,"script",script_message)
+            if custom_script is not None:script_message=f"Sending your draft to {provider_name} {model_name} for editing, then visual planning…"
+            else:script_message=f"Asking {provider_name} {model_name} to generate the final narration…"
+            report(1,"script",script_message,preview={
+                "phase":"narration_generating","message":"Waiting for the final narration before planning scene visuals.",
+                "scene_count":0,"scenes":[],
+            })
             try:
                 self._check_cancel(batch_id)
+                preview_callback=lambda preview:report(3,"script",preview.get("message") or "Updating the scene-planning preview…",preview=preview)
                 if custom_script is not None:
-                    script=self.scripts.generate_custom_script(title,custom_script,duration)
+                    script=self.scripts.generate_custom_script(title,custom_script,duration,progress_callback=preview_callback)
                 else:
-                    script=self.scripts.generate_script(title,duration)
+                    script=self.scripts.generate_script(title,duration,progress_callback=preview_callback)
                 self._check_cancel(batch_id)
                 context.update(script=script,media=[],audio_paths=[],video_path=None,subtitle_path=None,seo=None,thumbnail_path=None)
                 result["script"]=script;steps["script"]="done"
