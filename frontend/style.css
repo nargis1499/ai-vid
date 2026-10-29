@@ -124,3 +124,16 @@ body{font-size:16px}
 @media(max-width:580px){.step-item{grid-template-columns:25px minmax(0,1fr) auto auto;gap:6px}.step-retry-button{padding:5px 6px;font-size:9px}}
 
 .provider-choice-list{display:flex;gap:8px;margin:12px 0 8px}.provider-choice{min-height:36px;padding:0 15px;border:1px solid #353a48;border-radius:8px;background:#141823;color:#aeb4c0;font:600 12px var(--font);cursor:pointer;transition:background .15s,border-color .15s,color .15s}.provider-choice span{font-size:10px;color:#858c9a}.provider-choice:hover{border-color:#81515d;color:#f0dce0}.provider-choice.active{border-color:#bb5263;background:#321e27;color:#fff;box-shadow:inset 0 0 0 1px #bb526344}.provider-choice.active span{color:#e7a9b2}.provider-key-panel[hidden]{display:none}.local-model-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:12px 0;padding:12px;border:1px solid #303543;border-radius:9px;background:#0e1118}.local-model-row b,.local-model-row small{display:block}.local-model-row b{font-size:12px}.local-model-row small{font-size:10px;color:#858c99;margin-top:5px;overflow-wrap:anywhere}.local-model-progress{margin:10px 0}.local-model-progress>div{display:flex;justify-content:space-between;gap:8px;font-size:10px;color:#aeb4c0}.local-model-progress progress{width:100%;height:8px;margin-top:8px;accent-color:#f3475b}.local-model-progress[hidden]{display:none}
+
+/* Live, structured narration and visual-query preview during script planning. */
+.planning-preview{margin-top:10px;padding-top:8px;border-top:1px solid #272c37}
+.planning-preview>summary{color:#e3a3ad;font-size:10px;font-weight:700;cursor:pointer}
+.planning-preview-content{display:grid;gap:8px;margin-top:9px}
+.planning-preview-note{margin:0;color:#aab1bf;font-size:10px;line-height:1.55}
+.planning-preview-scene{min-width:0;padding:10px;border:1px solid #303543;border-radius:8px;background:#0e1118}
+.planning-preview-scene h4{margin:0 0 7px;color:#f0c2c8;font-size:11px}
+.planning-preview-field{margin:4px 0;color:#cbd0da;font-size:10px;line-height:1.55;overflow-wrap:anywhere}
+.planning-preview-field b{color:#f0f1f4;font-weight:700}
+.planning-preview-field ul{margin:4px 0 0;padding-left:18px;color:#b8bfcc}
+.planning-preview-field li{margin:2px 0;overflow-wrap:anywhere}
+@media(max-width:580px){.planning-preview-scene{padding:8px}.planning-preview-field,.planning-preview-note{font-size:10px}}

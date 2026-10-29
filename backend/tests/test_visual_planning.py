@@ -180,6 +180,54 @@ class VisualPlanningTests(unittest.TestCase):
         self.assertEqual(scene["visual_plan"]["target_duration"], 8)
         completion.assert_called_once()
 
+    def test_generation_publishes_narration_while_visual_plan_is_pending(self):
+        narration = "Two neighbors greet each other beside a front gate."
+        script_payload = {
+            "title": "Neighbor greetings", "description": "A short guide to warm greetings.",
+            "tags": ["neighbors", "greetings"],
+            "scenes": [{"scene_number": 1, "duration": 10, "narration": narration}],
+        }
+        visual_payload = {"visual_plans": [{
+            "scene_id": "scene-01", "core_meaning": "A warm greeting opens a conversation.",
+            "visual_objective": "Two neighbors greeting outside their homes.",
+            "visible_action": "Two neighbors waving and saying hello.",
+            "subjects": ["two neighbors"], "setting": "residential front gate",
+            "primary_query": "two neighbors greeting outside suburban home",
+            "alternative_queries": [
+                "friendly neighbor waving across front yard",
+                "neighbors smiling and saying hello on residential street",
+            ], "avoid_terms": ["office meeting"],
+        }]}
+        updates = []
+        calls = 0
+
+        def complete_json(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return json.dumps(script_payload), "mock narration provider"
+            self.assertEqual(updates[-1]["phase"], "visual_planning")
+            self.assertEqual(updates[-1]["scenes"][0]["narration"], narration)
+            return json.dumps(visual_payload), "mock visual planner"
+
+        with patch("script_generator.complete_json", side_effect=complete_json):
+            script = ScriptGenerator().generate_script("Neighbor greetings", 10, progress_callback=updates.append)
+
+        self.assertEqual(script["scenes"][0]["narration"], narration)
+        self.assertEqual([update["phase"] for update in updates], ["visual_planning", "planned"])
+        self.assertEqual(updates[-1]["scenes"][0]["primary_query"], visual_payload["visual_plans"][0]["primary_query"])
+        self.assertEqual(calls, 2)
+
+    def test_planning_preview_bounds_narration_and_query_fields(self):
+        preview = ScriptGenerator._planning_preview([{
+            "scene_number": 1, "duration": 10, "narration": "n" * 1000,
+            "visual_plan": {"primary_query": "q" * 200, "alternative_queries": ["a" * 200] * 10},
+        }], "planned", "ready")
+        self.assertEqual(len(preview["scenes"][0]["narration"]), 700)
+        self.assertEqual(len(preview["scenes"][0]["primary_query"]), 100)
+        self.assertEqual(len(preview["scenes"][0]["alternative_queries"]), 4)
+        self.assertTrue(all(len(query) <= 100 for query in preview["scenes"][0]["alternative_queries"]))
+
     def test_plan_validator_rejects_missing_ids_and_abstract_queries(self):
         with self.assertRaises(ValueError):
             ScriptGenerator._validate_visual_plan_payload({"visual_plans": []}, ["scene-01"])
@@ -193,10 +241,12 @@ class VisualPlanningTests(unittest.TestCase):
     def test_planner_failure_uses_short_fallback_and_preserves_narration(self):
         narration = "Offering practical help to a neighbor can make everyday life easier and create a stronger sense of community over time."
         scene = {"narration": narration, "duration": 10, "search_queries": []}
+        updates = []
         with patch("script_generator.complete_json", side_effect=RuntimeError("offline")):
             planner = ScriptGenerator()
-            source = planner._plan_scene_visuals([scene], "Helping neighbors")
+            source = planner._plan_scene_visuals([scene], "Helping neighbors", progress_callback=updates.append)
         self.assertTrue(source.startswith("structured-plan fallback"))
+        self.assertEqual([update["phase"] for update in updates], ["visual_planning", "fallback"])
         self.assertEqual(scene["narration"], narration)
         self.assertNotEqual(scene["visual_plan"]["primary_query"], narration)
         self.assertLessEqual(len(scene["visual_plan"]["primary_query"]), 100)

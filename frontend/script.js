@@ -85,7 +85,7 @@ async function startBatch(){
   const data=await response.json();if(!response.ok)throw new Error(data.error||'Unable to start batch');
   activeBatch=data.batch_id;$('#progress-section').classList.remove('hidden');$('#total-count').textContent=titles.length;$('#done-count').textContent='0';$('#failed-count').textContent='0 failed';$('#progress-title').textContent=thumbnailOnly?'Preparing your thumbnails':'Preparing your videos';$('#progress-message').textContent=thumbnailOnly?'Preparing scripts and visuals for thumbnail previews…':useCustom?'Preparing your scripts and scenes…':'Starting the creative pipeline…';
   $('#video-list').innerHTML=titles.map(makeVideoRow).join('');
-  $('#progress-section').scrollIntoView({behavior:'smooth',block:'nearest'});await pollBatch();pollTimer=setInterval(pollBatch,3000)
+  $('#progress-section').scrollIntoView({behavior:'smooth',block:'nearest'});await pollBatch();pollTimer=setInterval(pollBatch,1500)
  }catch(e){toast(e.message)}finally{button.disabled=false;button.querySelector('span:nth-child(2)').textContent=$('#thumbnail-only').checked?'Generate thumbnails':'Generate video batch'}
 }
 async function stopBatch(){
@@ -105,6 +105,68 @@ async function handleVideoAction(event){
  const button=event.target.closest('.publish-button');if(!button)return;
  const index=Number(button.dataset.index);button.disabled=true;button.textContent='Starting publish…';
  try{const response=await fetch(`/api/batch/${encodeURIComponent(activeBatch)}/publish/${index}`,{method:'POST'});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not publish video');toast('YouTube publishing started.');if(!pollTimer)pollTimer=setInterval(pollBatch,1500);await pollBatch()}catch(error){button.disabled=false;button.textContent='Publish to YouTube';toast(error.message||'Could not publish video')}
+}
+function addPlanningPreviewText(parent,label,value){
+ if(value==null||value==='')return;
+ const line=document.createElement('p');line.className='planning-preview-field';
+ const title=document.createElement('b');title.textContent=`${label}: `;
+ const body=document.createElement('span');body.textContent=String(value);
+ line.append(title,body);parent.append(line)
+}
+function addPlanningPreviewList(parent,label,values){
+ if(!Array.isArray(values)||!values.length)return;
+ const wrap=document.createElement('div');wrap.className='planning-preview-field';
+ const title=document.createElement('b');title.textContent=`${label}:`;wrap.append(title);
+ const list=document.createElement('ul');for(const value of values){const item=document.createElement('li');item.textContent=String(value);list.append(item)}
+ wrap.append(list);parent.append(wrap)
+}
+function renderPlanningPreview(row,preview){
+ if(!preview||typeof preview!=='object')return;
+ let details=row.querySelector('.planning-preview');
+ if(!details){
+  details=document.createElement('details');details.className='planning-preview';
+  const summary=document.createElement('summary');summary.textContent='Live scene-planning preview';
+  const content=document.createElement('div');content.className='planning-preview-content';
+  details.append(summary,content);row.querySelector('.video-row-main').append(details)
+ }
+ const signature=JSON.stringify(preview);
+ if(details.dataset.previewSignature===signature)return;
+ details.dataset.previewSignature=signature;
+ const phase=String(preview.phase||'');
+ details.querySelector('summary').textContent=phase==='planned'?'Scene plan preview · ready':phase==='fallback'?'Scene plan preview · built-in fallback':'Live scene-planning preview';
+ if(!row.dataset.planningPreviewAutoOpened&&(phase==='narration_generating'||phase==='visual_planning')){details.open=true;row.dataset.planningPreviewAutoOpened='true'}
+ const content=details.querySelector('.planning-preview-content');content.replaceChildren();
+ if(preview.message){const note=document.createElement('p');note.className='planning-preview-note';note.textContent=String(preview.message);content.append(note)}
+ const scenes=Array.isArray(preview.scenes)?preview.scenes:[];
+ for(const [index,scene] of scenes.entries()){
+  const card=document.createElement('section');card.className='planning-preview-scene';
+  const heading=document.createElement('h4');heading.textContent=`Scene ${String(scene.scene_number||index+1).padStart(2,'0')}${scene.duration?` · ${scene.duration}s`:''}`;card.append(heading);
+  addPlanningPreviewText(card,'Narration',scene.narration);
+  addPlanningPreviewText(card,'Core meaning',scene.core_meaning);
+  addPlanningPreviewText(card,'Visual objective',scene.visual_objective);
+  addPlanningPreviewText(card,'Visible action',scene.visible_action);
+  addPlanningPreviewList(card,'Subjects',scene.subjects);
+  addPlanningPreviewText(card,'Setting',scene.setting);
+  addPlanningPreviewText(card,'Primary stock query',scene.primary_query);
+  addPlanningPreviewList(card,'Alternative queries',scene.alternative_queries);
+  addPlanningPreviewList(card,'Avoid terms',scene.avoid_terms);
+  content.append(card)
+ }
+ if(!scenes.length&&phase==='narration_generating'){const waiting=document.createElement('p');waiting.className='planning-preview-note';waiting.textContent='Scene details will appear as soon as narration is available.';content.append(waiting)}
+}
+function renderFinalScriptPreview(row,script){
+ if(!script||!Array.isArray(script.scenes))return;
+ let details=row.querySelector('.script-preview');
+ if(!details){details=document.createElement('details');details.className='script-preview';row.querySelector('.video-row-main').append(details)}
+ const signature=JSON.stringify(script);
+ if(details.dataset.scriptSignature===signature)return;
+ details.dataset.scriptSignature=signature;
+ const isCustom=Boolean(script.custom_script_reviewed);
+ const summary=document.createElement('summary');summary.textContent=isCustom?'View final AI-reviewed narration':'View final narration';
+ const preview=document.createElement('div');preview.className='script-preview-content';
+ if(script.review_summary){const note=document.createElement('small');note.textContent=script.review_summary;preview.append(note)}
+ const narration=document.createElement('pre');narration.textContent=script.scenes.map(scene=>scene.narration||'').filter(Boolean).join(String.fromCharCode(10,10));
+ preview.append(narration);details.replaceChildren(summary,preview)
 }
 async function pollBatch(){
  if(!activeBatch)return;
@@ -141,18 +203,8 @@ async function pollBatch(){
    badge.className=`row-state ${state}`;
    badge.textContent=state.toUpperCase();
    updateStepDetails(row,video,data.status);
-   if(video.script&&Array.isArray(video.script.scenes)&&!row.querySelector('.script-preview')){
-    const details=document.createElement('details');
-    details.className='script-preview';
-    const summary=document.createElement('summary');
-    summary.textContent=video.script.custom_script_reviewed?'View AI-reviewed narration':'View generated narration';
-    const preview=document.createElement('div');
-    preview.className='script-preview-content';
-    if(video.script.review_summary){const note=document.createElement('small');note.textContent=video.script.review_summary;preview.append(note)}
-    const narration=document.createElement('pre');
-    narration.textContent=video.script.scenes.map(scene=>scene.narration||'').filter(Boolean).join(String.fromCharCode(10,10));
-    preview.append(narration);details.append(summary,preview);row.querySelector('.video-row-main').append(details)
-   }
+   renderPlanningPreview(row,video.planning_preview);
+   renderFinalScriptPreview(row,video.script);
    if(video.video_path&&!row.querySelector('.video-download')){const link=document.createElement('a');link.href=`/api/video/${encodeURIComponent(activeBatch)}/${index}`;link.textContent='Download video';link.className='video-download';link.setAttribute('download','');row.querySelector('b').append(' ',link)}
    if(video.subtitle_path&&!row.querySelector('.subtitle-download')){const link=document.createElement('a');link.href=`/api/subtitles/${encodeURIComponent(activeBatch)}/${index}`;link.textContent='Subtitles (.srt)';link.className='subtitle-download';link.setAttribute('download','');row.querySelector('b').append(' ',link)}
    if(video.thumbnail_path&&!row.querySelector('.thumbnail-download')){const link=document.createElement('a');link.href=`/api/thumbnail/${encodeURIComponent(activeBatch)}/${index}`;link.textContent='Thumbnail (.jpg)';link.className='thumbnail-download';link.setAttribute('download','');row.querySelector('b').append(' ',link)}
