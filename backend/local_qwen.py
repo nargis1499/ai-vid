@@ -11,9 +11,13 @@ import requests
 from settings_store import APP_DATA_DIR, load_settings
 
 MODEL_ID = "qwen3-1.7b-q4_k_m"
-MODEL_REPO = "Qwen/Qwen3-1.7B-GGUF"
+MODEL_REPOS = (
+    "bartowski/Qwen_Qwen3-1.7B-GGUF",
+    "lmstudio-community/Qwen3-1.7B-GGUF",
+    "unsloth/Qwen3-1.7B-GGUF",
+    "Qwen/Qwen3-1.7B-GGUF",
+)
 MODEL_FILENAME = "Qwen3-1.7B-Q4_K_M.gguf"
-MODEL_FILES_API = f"https://huggingface.co/api/models/{MODEL_REPO}?blobs=true"
 
 DEFAULT_MODEL_PATH = APP_DATA_DIR / "models" / MODEL_FILENAME
 
@@ -37,27 +41,30 @@ def _has_gguf_header(path: Path) -> bool:
         return False
 
 
-def _resolve_model_url() -> str:
-    """Resolve the requested quantization from the repository manifest, not a guessed filename."""
-    try:
-        response = requests.get(
-            MODEL_FILES_API,
-            headers={"Accept": "application/json", "User-Agent": "CreatorFlow local-model downloader"},
-            timeout=(20, 60),
-        )
-        response.raise_for_status()
-        payload = response.json()
-    except (requests.RequestException, ValueError) as exc:
-        raise RuntimeError(f"Could not read the Qwen model file catalog from Hugging Face: {exc}") from exc
-    siblings = payload.get("siblings") if isinstance(payload, dict) else None
-    files = [str(item.get("rfilename") or "") for item in siblings or [] if isinstance(item, dict)]
-    matches = [name for name in files if name.lower().endswith("q4_k_m.gguf")]
-    if not matches:
+def _resolve_model_url() -> tuple[str, str]:
+    """Find Q4_K_M in known Qwen GGUF repositories instead of assuming a file exists upstream."""
+    headers = {"Accept": "application/json", "User-Agent": "CreatorFlow local-model downloader"}
+    catalog_notes = []
+    for repo in MODEL_REPOS:
+        api_url = f"https://huggingface.co/api/models/{repo}?blobs=true"
+        try:
+            response = requests.get(api_url, headers=headers, timeout=(20, 60))
+            response.raise_for_status()
+            payload = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            catalog_notes.append(f"{repo}: {exc}")
+            continue
+        siblings = payload.get("siblings") if isinstance(payload, dict) else None
+        files = [str(item.get("rfilename") or "") for item in siblings or [] if isinstance(item, dict)]
+        matches = [name for name in files if name.lower().endswith("q4_k_m.gguf")]
+        if matches:
+            selected = next((name for name in matches if name.rsplit("/", 1)[-1].casefold() == MODEL_FILENAME.casefold()), matches[0])
+            return f"https://huggingface.co/{repo}/resolve/main/{quote(selected, safe='/')}", repo
         available = [name for name in files if name.lower().endswith(".gguf")]
-        choices = ", ".join(available[:8]) if available else "none listed"
-        raise RuntimeError(f"The Hugging Face repository {MODEL_REPO} does not list a Q4_K_M GGUF file. Available GGUF files: {choices}.")
-    selected = next((name for name in matches if name.rsplit("/", 1)[-1].casefold() == MODEL_FILENAME.casefold()), matches[0])
-    return f"https://huggingface.co/{MODEL_REPO}/resolve/main/{quote(selected, safe='/')}"
+        if available:
+            catalog_notes.append(f"{repo}: {', '.join(available[:5])}")
+    notes = "; ".join(catalog_notes) or "no GGUF files were listed"
+    raise RuntimeError(f"Could not find a Q4_K_M GGUF in the known Qwen3 1.7B repositories. Catalog results: {notes}")
 
 
 def runtime_status() -> dict:
@@ -107,7 +114,9 @@ def _download_model(path: Path) -> None:
         headers = {"User-Agent": "CreatorFlow local-model downloader"}
         if existing:
             headers["Range"] = f"bytes={existing}-"
-        model_url = _resolve_model_url()
+        model_url, model_repo = _resolve_model_url()
+        with _download_lock:
+            _download_state["source_repo"] = model_repo
         with requests.get(model_url, headers=headers, stream=True, timeout=(20, 120), allow_redirects=True) as response:
             if existing and response.status_code == 206:
                 mode = "ab"
