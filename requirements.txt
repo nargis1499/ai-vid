@@ -1,0 +1,3 @@
+# Web hosts commonly install dependencies from the repository root.
+# Keep this in sync via the backend's canonical dependency manifest.
+-r backend/requirements.txt
