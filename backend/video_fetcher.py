@@ -1,5 +1,4 @@
 """Search and rank Pexels/Pixabay video candidates using scene text metadata."""
-import math
 import os
 from urllib.parse import unquote, urlparse
 
@@ -7,7 +6,13 @@ import requests
 
 from common import DIRS
 from pixabay_client import PixabayClient
-from stock_search import MIN_STOCK_RELEVANCE, relevance_score, search_queries
+from stock_search import (
+    EARLY_STOP_SEMANTIC_RELEVANCE,
+    MIN_STOCK_RELEVANCE,
+    rank_stock_candidates,
+    search_queries,
+    technical_suitability_score,
+)
 
 
 class VideoFetcher:
@@ -15,6 +20,8 @@ class VideoFetcher:
         self.api_key = os.getenv("PEXELS_API_KEY", "").strip()
         self.pixabay = PixabayClient(os.getenv("PIXABAY_API_KEY", ""))
         self.last_source = None
+        self.last_selection = None
+        self._used_assets = set()
 
     @staticmethod
     def _duration(video):
@@ -22,13 +29,6 @@ class VideoFetcher:
             return float(video.get("duration") or 0)
         except (AttributeError, TypeError, ValueError):
             return 0.0
-
-    @staticmethod
-    def _duration_score(duration, target_duration):
-        if not target_duration or target_duration <= 0 or duration <= 0:
-            return 0.0
-        distance = min(abs(math.log(max(duration / target_duration, 0.01))), 2.0)
-        return 0.08 * (1.0 - distance / 2.0)
 
     @staticmethod
     def _best_video_file(files):
@@ -78,9 +78,14 @@ class VideoFetcher:
     def _video_metadata(video, provider):
         if provider == "Pexels":
             url = unquote(str(video.get("url") or ""))
-            slug = urlparse(url).path.strip("/").rsplit("/", 1)[-1]
-            return " ".join((slug, str(video.get("alt") or "")))
-        return " ".join((str(video.get("tags") or ""), str(video.get("type") or "")))
+            slug = urlparse(url).path.strip("/").rsplit("/", 1)[-1].replace("-", " ")
+            return {"title": slug, "description": video.get("alt") or ""}
+        return {
+            "title": video.get("title") or "",
+            "description": video.get("description") or "",
+            "tags": video.get("tags") or "",
+            "type": video.get("type") or "",
+        }
 
     def _search_pexels(self, query, query_rank, min_duration):
         if not self.api_key:
@@ -110,7 +115,8 @@ class VideoFetcher:
                 identity = str(video.get("id") or video.get("url") or selected_file["url"])
                 candidates.append({
                     "provider": "Pexels", "identity": identity, "video": video,
-                    "file": selected_file, "query_rank": query_rank, "rank": rank,
+                    "metadata": self._video_metadata(video, "Pexels"),
+                    "file": selected_file, "query": query, "query_rank": query_rank, "rank": rank,
                 })
             return candidates
         except Exception as exc:
@@ -138,7 +144,8 @@ class VideoFetcher:
                 identity = str(video.get("id") or selected_file["url"])
                 candidates.append({
                     "provider": "Pixabay", "identity": identity, "video": video,
-                    "file": selected_file, "query_rank": query_rank, "rank": rank,
+                    "metadata": self._video_metadata(video, "Pixabay"),
+                    "file": selected_file, "query": query, "query_rank": query_rank, "rank": rank,
                 })
             return candidates
         except Exception as exc:
@@ -146,61 +153,61 @@ class VideoFetcher:
             return []
 
     def fetch_clip(self, query, index: int, min_dur: float = 5) -> str | None:
-        """Search focused variants and reject clips whose metadata weakly matches the scene."""
+        """Search a bounded query set, then rank by scene semantics before technical fit."""
         self.last_source = None
-        queries = search_queries(query, max_queries=2)
-        match_queries = search_queries(query, max_queries=8)
-        target_duration = self._duration(query)
+        self.last_selection = None
+        queries = search_queries(query, max_queries=5)
         if not queries:
             return None
-        candidates = {}
+        candidates = []
         for query_rank, phrase in enumerate(queries):
             found = self._search_pexels(phrase, query_rank, min_dur)
             found.extend(self._search_pixabay(phrase, query_rank, min_dur))
             for candidate in found:
-                key = (candidate["provider"], candidate["identity"])
-                previous = candidates.get(key)
-                if previous is None or (candidate["query_rank"], candidate["rank"]) < (previous["query_rank"], previous["rank"]):
-                    candidates[key] = candidate
-        if not candidates:
-            return None
-        adequate_resolution=[]
-        for candidate in candidates.values():
-            try:
-                width=int(candidate["file"].get("width") or 0)
-                height=int(candidate["file"].get("height") or 0)
-            except (TypeError,ValueError):
-                width,height=0,0
-            if width>=640 and height>=360:
-                adequate_resolution.append(candidate)
-        if adequate_resolution:
-            candidates={(item["provider"],item["identity"]):item for item in adequate_resolution}
+                candidate.setdefault("query", phrase)
+                candidates.append(candidate)
 
-        ranked = []
-        for candidate in candidates.values():
-            candidate["relevance"] = relevance_score(
-                match_queries, self._video_metadata(candidate["video"], candidate["provider"])
-            )
-            if candidate["relevance"] < MIN_STOCK_RELEVANCE:
-                continue
-            duration_score = self._duration_score(self._duration(candidate["video"]), target_duration)
-            candidate["rank_score"] = candidate["relevance"] + duration_score + (0.04 if candidate["provider"] == "Pexels" else 0.0)
-            ranked.append(candidate)
+            # Require a second query and three strong, distinct metadata matches before
+            # stopping. This is a request-saving heuristic, not visual verification.
+            if query_rank >= 1:
+                strong = rank_stock_candidates(
+                    query, candidates, min_semantic=EARLY_STOP_SEMANTIC_RELEVANCE,
+                    used_assets=self._used_assets,
+                )
+                if len(strong) >= 3:
+                    break
+
+        ranked = rank_stock_candidates(query, candidates, used_assets=self._used_assets)
         if not ranked:
-            print(f"[video] Rejected stock clips below the {MIN_STOCK_RELEVANCE:.2f} scene-relevance threshold.")
+            print(f"[video] No candidate met the {MIN_STOCK_RELEVANCE:.2f} scene-semantic threshold; using the existing visual fallback.")
             return None
-        ranked.sort(key=lambda item: (
-            -item["rank_score"],
-            0 if item["provider"] == "Pexels" else 1,
-            item["query_rank"],
-            item["rank"],
-        ))
         for selected in ranked:
             try:
                 path = self._download_clip(selected["file"]["url"], index)
+                selected["accessible"] = True
+                plan = query.get("visual_plan") if isinstance(query, dict) else {}
+                selected_technical = technical_suitability_score(
+                    width=selected["file"].get("width"), height=selected["file"].get("height"),
+                    duration=self._duration(selected["video"]),
+                    target_duration=(plan or {}).get("target_duration") or self._duration(query),
+                    orientation=(plan or {}).get("required_orientation", "landscape"),
+                    accessible=True, media_type="video",
+                )
+                selected["technical_suitability"] = selected_technical["score"]
+                selected["technical_breakdown"] = selected_technical["components"]
                 self.last_source = selected["provider"]
+                metadata = selected.get("metadata") if isinstance(selected.get("metadata"), dict) else {}
+                self.last_selection = {
+                    "provider": selected["provider"], "identity": selected.get("identity"),
+                    "query": selected.get("query"), "title": metadata.get("title", ""),
+                    "semantic_relevance": selected["semantic_relevance"],
+                    "technical_suitability": selected["technical_suitability"], "accessible": True,
+                    "final_rank": selected["final_rank"], "stable_key": selected["stable_key"],
+                }
+                self._used_assets.update(selected.get("stable_keys") or ([selected["stable_key"]] if selected.get("stable_key") else []))
                 return path
             except Exception as exc:
+                selected["accessible"] = False
                 print(f"[video] Could not download a ranked {selected['provider']} clip: {exc}")
         return None
 
