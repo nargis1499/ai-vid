@@ -1,5 +1,6 @@
 """Assemble scenes, narration, burned-in subtitles, and title-matched music."""
 import os
+import random
 import re
 from pathlib import Path
 
@@ -8,9 +9,8 @@ from common import DIRS, ROOT_DIR
 
 class VideoAssembler:
     TRANSITION_DURATION = 0.5
-    # Keep scene content anchored to the frame. Translated slides can expose
-    # empty canvas edges during composition; zoom-push is cropped per-frame below.
-    TRANSITION_STYLES = ("crossfade", "zoom-push")
+    # Choose a different requested transition randomly at each scene boundary.
+    TRANSITION_STYLES = ("spin-blur", "panel-slice", "shattered-glass")
 
     def __init__(self):
         self.last_video_encoder = None
@@ -174,8 +174,11 @@ class VideoAssembler:
 
             if not clips:
                 raise RuntimeError("No usable scene media was generated")
+            previous_style = None
             for index in range(1, len(clips)):
-                style = self.TRANSITION_STYLES[(index - 1) % len(self.TRANSITION_STYLES)]
+                choices = [style for style in self.TRANSITION_STYLES if style != previous_style]
+                style = random.choice(choices or self.TRANSITION_STYLES)
+                previous_style = style
                 clips[index] = self._apply_scene_transition(
                     clips[index], style, self.TRANSITION_DURATION, output_size
                 )
@@ -243,6 +246,9 @@ class VideoAssembler:
                     pass
             for clip in subtitle_clips + clips:
                 try:
+                    source_clip = getattr(clip, "_transition_source", None)
+                    if source_clip is not None:
+                        source_clip.close()
                     clip.close()
                 except Exception:
                     pass
@@ -254,37 +260,193 @@ class VideoAssembler:
 
     @staticmethod
     def _apply_scene_transition(clip, style, duration, frame_size):
+        """Animate the incoming scene over the outgoing scene with a per-pixel alpha mask."""
+        import math
+        from functools import lru_cache
+        import numpy as np
+        from PIL import Image, ImageDraw, ImageFilter
+        from moviepy.editor import VideoClip
+
         width, height = (int(frame_size[0]), int(frame_size[1]))
-        if style == "zoom-push":
-            import numpy as np
-            from PIL import Image
-            from moviepy.editor import VideoClip
+        duration = max(0.001, float(duration))
+        resampling = getattr(Image, "Resampling", Image).BICUBIC
 
-            resampling = getattr(Image, "Resampling", Image).LANCZOS
+        def smoothstep(value):
+            value = min(1.0, max(0.0, float(value)))
+            return value * value * (3.0 - 2.0 * value)
 
-            def zoom_frame(t):
-                # Recalculate the crop from each resized frame; a fixed crop
-                # rectangle extends past the image as the zoom shrinks and
-                # creates black strips along the right and bottom edges.
-                frame = clip.get_frame(t)
-                progress = min(1.0, max(0.0, t) / max(duration, 0.001))
-                scale = 1.10 - 0.10 * progress
-                if scale <= 1.0 and frame.shape[1] == width and frame.shape[0] == height:
-                    return frame
-                if scale > 1.0:
-                    crop_width = max(1, int(round(frame.shape[1] / scale)))
-                    crop_height = max(1, int(round(frame.shape[0] / scale)))
-                    left = max(0, (frame.shape[1] - crop_width) // 2)
-                    top = max(0, (frame.shape[0] - crop_height) // 2)
-                    frame = frame[top:top + crop_height, left:left + crop_width]
-                return np.asarray(Image.fromarray(frame).resize((width, height), resampling))
+        def progress_at(t):
+            return min(1.0, max(0.0, float(t) / duration))
 
-            zoomed = VideoClip(make_frame=zoom_frame, duration=clip.duration)
-            if getattr(clip, "fps", None):
-                zoomed = zoomed.set_fps(clip.fps)
-            return zoomed.crossfadein(min(0.18, duration))
-        # A full-frame crossfade never translates a scene beyond the canvas.
-        return clip.crossfadein(duration)
+        if style == "spin-blur":
+            def render(t):
+                progress = progress_at(t)
+                source = Image.fromarray(np.asarray(clip.get_frame(t), dtype=np.uint8))
+                cx, cy = (width - 1) / 2.0, (height - 1) / 2.0
+                blurred = None
+                # Blend nearby rotational/zoom samples to create a radial motion blur.
+                for sample_index in range(3):
+                    sample_progress = min(1.0, max(0.0, progress + (sample_index - 1) * 0.055))
+                    angle = (1.0 - sample_progress) * math.radians(300.0)
+                    scale = 1.0 + (1.0 - sample_progress) * 0.55
+                    cos_a, sin_a = math.cos(angle) / scale, math.sin(angle) / scale
+                    affine = (
+                        cos_a, sin_a, cx - cos_a * cx - sin_a * cy,
+                        -sin_a, cos_a, cy + sin_a * cx - cos_a * cy,
+                    )
+                    sample = source.transform((width, height), Image.Transform.AFFINE, affine,
+                                              resample=resampling, fillcolor=(0, 0, 0))
+                    blurred = sample if blurred is None else Image.blend(blurred, sample, 1.0 / (sample_index + 1))
+                alpha = np.full((height, width), smoothstep(progress), dtype=np.float32)
+                return np.asarray(blurred, dtype=np.uint8).copy(), alpha
+
+        elif style == "panel-slice":
+            def render(t):
+                progress = progress_at(t)
+                frame = Image.fromarray(np.asarray(clip.get_frame(t), dtype=np.uint8))
+                canvas = Image.new("RGB", (width, height), (0, 0, 0))
+                coverage = Image.new("L", (width, height), 0)
+                panel_count = 8
+                for panel in range(panel_count):
+                    x0 = round(panel * width / panel_count)
+                    x1 = round((panel + 1) * width / panel_count)
+                    delay = 0.045 * (panel % 3)
+                    panel_progress = smoothstep((progress - delay) / max(0.001, 1.0 - delay))
+                    direction = 1 if panel % 2 == 0 else -1
+                    shift = round(direction * (1.0 - panel_progress) * width)
+                    panel_image = frame.crop((x0, 0, x1, height))
+                    destination_x = x0 + shift
+                    canvas.paste(panel_image, (destination_x, 0))
+                    coverage.paste(Image.new("L", (x1 - x0, height), 255), (destination_x, 0))
+                # Feather the moving edges to give the opposing strips a short motion-blur trail.
+                radius = max(0.7, (1.0 - progress) * 5.0)
+                blurred_coverage = coverage.filter(ImageFilter.GaussianBlur(radius=radius))
+                blurred_rgb = canvas.filter(ImageFilter.GaussianBlur(radius=radius))
+                alpha = np.asarray(blurred_coverage, dtype=np.float32) / 255.0
+                premultiplied = np.asarray(blurred_rgb, dtype=np.float32)
+                nonzero = alpha > 1e-5
+                premultiplied[nonzero] /= alpha[nonzero, None]
+                premultiplied[~nonzero] = 0
+                return np.clip(premultiplied, 0, 255).astype(np.uint8), alpha
+
+        elif style == "shattered-glass":
+            rng = np.random.default_rng()
+            rows, columns = 6, 10
+            vertices = np.zeros((rows + 1, columns + 1, 2), dtype=np.float32)
+            for row in range(rows + 1):
+                for column in range(columns + 1):
+                    x = column * width / columns
+                    y = row * height / rows
+                    if 0 < row < rows:
+                        x += rng.uniform(-0.17, 0.17) * width / columns
+                    if 0 < column < columns:
+                        y += rng.uniform(-0.17, 0.17) * height / rows
+                    vertices[row, column] = (x, y)
+            triangles = []
+            for row in range(rows):
+                for column in range(columns):
+                    a, b = vertices[row, column], vertices[row, column + 1]
+                    c, d = vertices[row + 1, column], vertices[row + 1, column + 1]
+                    if rng.integers(0, 2):
+                        triangles.extend(((a, b, c), (b, d, c)))
+                    else:
+                        triangles.extend(((a, b, d), (a, d, c)))
+            shard_ids = np.full((height, width), 255, dtype=np.uint8)
+            centers = np.empty((len(triangles), 2), dtype=np.float32)
+            for shard_id, triangle in enumerate(triangles):
+                points = np.asarray(triangle, dtype=np.float32)
+                centers[shard_id] = points.mean(axis=0)
+                x_min = max(0, int(np.floor(points[:, 0].min())))
+                x_max = min(width, int(np.ceil(points[:, 0].max())) + 1)
+                y_min = max(0, int(np.floor(points[:, 1].min())))
+                y_max = min(height, int(np.ceil(points[:, 1].max())) + 1)
+                if x_min >= x_max or y_min >= y_max:
+                    continue
+                px = np.arange(x_min, x_max, dtype=np.float32)[None, :] + 0.5
+                py = np.arange(y_min, y_max, dtype=np.float32)[:, None] + 0.5
+                ax, ay = points[0]
+                bx, by = points[1]
+                cx, cy = points[2]
+                denominator = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy)
+                if abs(float(denominator)) < 1e-6:
+                    continue
+                wa = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / denominator
+                wb = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / denominator
+                inside = (wa >= -1e-4) & (wb >= -1e-4) & ((1.0 - wa - wb) >= -1e-4)
+                region = shard_ids[y_min:y_max, x_min:x_max]
+                region[inside] = shard_id
+            shard_ids[shard_ids == 255] = 0
+            shard_count = len(triangles)
+            delays = rng.uniform(0.0, 0.30, size=shard_count).astype(np.float32)
+            directions = centers - np.array([width / 2.0, height / 2.0], dtype=np.float32)
+            lengths = np.linalg.norm(directions, axis=1)
+            lengths[lengths < 1e-3] = 1.0
+            directions /= lengths[:, None]
+            travel = rng.uniform(0.05, 0.13, size=shard_count).astype(np.float32) * max(width, height)
+            directions *= travel[:, None]
+            x_grid = np.arange(width, dtype=np.float32)[None, :]
+            y_grid = np.arange(height, dtype=np.float32)[:, None]
+
+            def render(t):
+                progress = progress_at(t)
+                shard_progress = np.clip((progress - delays) / (1.0 - delays), 0.0, 1.0)
+                shard_progress = shard_progress * shard_progress * (3.0 - 2.0 * shard_progress)
+                per_pixel_progress = shard_progress[shard_ids]
+                displacement = (1.0 - shard_progress)[:, None] * directions
+                source_x = x_grid - displacement[shard_ids, 0]
+                source_y = y_grid - displacement[shard_ids, 1]
+                frame = np.asarray(clip.get_frame(t), dtype=np.uint8)
+                transformed = VideoAssembler._sample_bilinear(frame, source_x, source_y)
+                alpha = per_pixel_progress.astype(np.float32)
+                return transformed, alpha
+        else:
+            raise ValueError(f"Unknown scene transition: {style}")
+
+        @lru_cache(maxsize=1)
+        def cached_render(time_value):
+            return render(time_value)
+
+        def frame_at(t):
+            return cached_render(round(float(t), 5))[0]
+
+        def mask_at(t):
+            return cached_render(round(float(t), 5))[1]
+
+        transitioned = VideoClip(make_frame=frame_at, duration=clip.duration)
+        mask_clip = VideoClip(make_frame=mask_at, ismask=True, duration=clip.duration)
+        transitioned = transitioned.set_mask(mask_clip)
+        transitioned._transition_source = clip
+        if getattr(clip, "fps", None):
+            transitioned = transitioned.set_fps(clip.fps)
+        return transitioned
+
+    @staticmethod
+    def _sample_bilinear(frame, source_x, source_y):
+        """Bilinearly sample RGB pixels, reflecting out-of-range coordinates at frame edges."""
+        import numpy as np
+
+        height, width = frame.shape[:2]
+        if width > 1:
+            period_x = 2.0 * (width - 1)
+            source_x = np.mod(source_x, period_x)
+            source_x = np.where(source_x > width - 1, period_x - source_x, source_x)
+        else:
+            source_x = np.zeros_like(source_x)
+        if height > 1:
+            period_y = 2.0 * (height - 1)
+            source_y = np.mod(source_y, period_y)
+            source_y = np.where(source_y > height - 1, period_y - source_y, source_y)
+        else:
+            source_y = np.zeros_like(source_y)
+        x0 = np.floor(source_x).astype(np.int32)
+        y0 = np.floor(source_y).astype(np.int32)
+        x1 = np.minimum(x0 + 1, width - 1)
+        y1 = np.minimum(y0 + 1, height - 1)
+        wx = (source_x - x0)[..., None].astype(np.float32)
+        wy = (source_y - y0)[..., None].astype(np.float32)
+        top = frame[y0, x0].astype(np.float32) * (1.0 - wx) + frame[y0, x1].astype(np.float32) * wx
+        bottom = frame[y1, x0].astype(np.float32) * (1.0 - wx) + frame[y1, x1].astype(np.float32) * wx
+        return np.clip(top * (1.0 - wy) + bottom * wy, 0, 255).astype(np.uint8)
 
     @classmethod
     def _make_subtitles(cls, scenes, speech_durations, scene_starts, video_duration, frame_size):
