@@ -9,8 +9,11 @@ from common import DIRS, ROOT_DIR
 
 class VideoAssembler:
     TRANSITION_DURATION = 0.5
-    # Randomly use the panel-slice or shattered-glass transition at each scene boundary.
-    TRANSITION_STYLES = ("panel-slice", "shattered-glass")
+    # Randomly choose among the retained and newly added transitions at each scene boundary.
+    TRANSITION_STYLES = (
+        "panel-slice", "shattered-glass", "swish-pan", "light-leak",
+        "split-wipe", "luma-dissolve",
+    )
 
     def __init__(self):
         self.last_video_encoder = None
@@ -374,6 +377,110 @@ class VideoAssembler:
                 transformed = VideoAssembler._sample_bilinear(frame, source_x, source_y)
                 alpha = per_pixel_progress.astype(np.float32)
                 return transformed, alpha
+
+        elif style == "swish-pan":
+            direction = random.choice(("left", "right", "up", "down"))
+            motion_x = 1 if direction == "left" else -1 if direction == "right" else 0
+            motion_y = 1 if direction == "up" else -1 if direction == "down" else 0
+            x_grid = np.arange(width, dtype=np.float32)[None, :]
+            y_grid = np.arange(height, dtype=np.float32)[:, None]
+
+            def render(t):
+                progress = progress_at(t)
+                source = np.asarray(clip.get_frame(t), dtype=np.uint8)
+                accumulated_rgb = np.zeros((height, width, 3), dtype=np.float32)
+                accumulated_alpha = np.zeros((height, width), dtype=np.float32)
+                sample_count = 5
+                for sample_index in range(sample_count):
+                    # Neighboring motion samples form a directional blur kernel;
+                    # smoothstep accelerates into and decelerates out of the whip.
+                    sample_progress = min(1.0, max(0.0, progress + (sample_index - 2) * 0.045))
+                    eased = smoothstep(sample_progress)
+                    offset_x = motion_x * (1.0 - eased) * width
+                    offset_y = motion_y * (1.0 - eased) * height
+                    source_x = x_grid - offset_x
+                    source_y = y_grid - offset_y
+                    valid = ((source_x >= 0) & (source_x <= width - 1) &
+                             (source_y >= 0) & (source_y <= height - 1))
+                    sample = VideoAssembler._sample_bilinear(source, source_x, source_y)
+                    accumulated_rgb += sample.astype(np.float32) * valid[..., None]
+                    accumulated_alpha += valid.astype(np.float32)
+                valid_pixels = accumulated_alpha > 1e-5
+                accumulated_rgb[valid_pixels] /= accumulated_alpha[valid_pixels, None]
+                accumulated_rgb[~valid_pixels] = 0
+                alpha = accumulated_alpha / sample_count
+                alpha *= smoothstep(progress)
+                return np.clip(accumulated_rgb, 0, 255).astype(np.uint8), alpha
+
+        elif style == "light-leak":
+            flare_direction = random.choice(("left-to-right", "right-to-left"))
+            flare_y = random.uniform(0.22, 0.78) * height
+            x_grid = np.arange(width, dtype=np.float32)[None, :]
+            y_grid = np.arange(height, dtype=np.float32)[:, None]
+            warm_tint = np.array([255.0, 142.0, 54.0], dtype=np.float32)
+
+            def render(t):
+                progress = progress_at(t)
+                source = np.asarray(clip.get_frame(t), dtype=np.uint8).astype(np.float32)
+                peak = float(np.sin(np.pi * progress) ** 1.4)
+                travel = progress if flare_direction == "left-to-right" else 1.0 - progress
+                center_x = (-0.08 + 1.16 * travel) * width
+                radial = np.exp(-(((x_grid - center_x) / max(1.0, width * 0.24)) ** 2 +
+                                  ((y_grid - flare_y) / max(1.0, height * 0.40)) ** 2) * 2.2)
+                streak = np.exp(-((y_grid - flare_y) / max(1.0, height * 0.018)) ** 2)
+                strength = np.clip(peak * (0.46 + 0.54 * radial + 0.15 * streak), 0.0, 0.98)
+                tint = warm_tint[None, None, :] + (255.0 - warm_tint[None, None, :]) * radial[..., None]
+                output = source * (1.0 - strength[..., None]) + tint * strength[..., None]
+                opacity = max(smoothstep(progress), peak * 0.96)
+                alpha = np.full((height, width), opacity, dtype=np.float32)
+                return np.clip(output, 0, 255).astype(np.uint8), alpha
+
+        elif style == "split-wipe":
+            orientation = random.choice(("vertical", "horizontal", "diagonal"))
+            reverse = random.choice((False, True))
+            x_grid = np.arange(width, dtype=np.float32)[None, :] / max(1, width)
+            y_grid = np.arange(height, dtype=np.float32)[:, None] / max(1, height)
+            if orientation == "vertical":
+                softness = max(0.006, 3.0 / width)
+            elif orientation == "horizontal":
+                softness = max(0.006, 3.0 / height)
+            else:
+                softness = max(0.006, 4.0 / max(width, height))
+
+            def render(t):
+                progress = progress_at(t)
+                if orientation == "vertical":
+                    coordinate = np.broadcast_to(x_grid, (height, width))
+                elif orientation == "horizontal":
+                    coordinate = np.broadcast_to(y_grid, (height, width))
+                else:
+                    coordinate = np.broadcast_to((x_grid + y_grid) * 0.5, (height, width))
+                if reverse:
+                    coordinate = 1.0 - coordinate
+                edge_progress = np.clip((progress - coordinate) / softness + 0.5, 0.0, 1.0)
+                alpha = edge_progress * edge_progress * (3.0 - 2.0 * edge_progress)
+                frame = np.asarray(clip.get_frame(t), dtype=np.uint8)
+                return frame, alpha.astype(np.float32)
+
+        elif style == "luma-dissolve":
+            bright_first = random.choice((True, False))
+            gradient_axis = random.choice(("horizontal", "vertical"))
+            reverse_gradient = random.choice((True, False))
+            x_grid = np.arange(width, dtype=np.float32)[None, :] / max(1, width - 1)
+            y_grid = np.arange(height, dtype=np.float32)[:, None] / max(1, height - 1)
+            def render(t):
+                progress = progress_at(t)
+                frame = np.asarray(clip.get_frame(t), dtype=np.uint8)
+                luma = (0.2126 * frame[..., 0] + 0.7152 * frame[..., 1] +
+                        0.0722 * frame[..., 2]) / 255.0
+                brightness_delay = (1.0 - luma) if bright_first else luma
+                gradient = x_grid if gradient_axis == "horizontal" else y_grid
+                if reverse_gradient:
+                    gradient = 1.0 - gradient
+                delay = 0.78 * brightness_delay + 0.18 * gradient
+                threshold = np.clip((progress - delay) / 0.16, 0.0, 1.0)
+                alpha = threshold * threshold * (3.0 - 2.0 * threshold)
+                return frame, alpha.astype(np.float32)
         else:
             raise ValueError(f"Unknown scene transition: {style}")
 

@@ -2,7 +2,7 @@ const $=s=>document.querySelector(s);const titlesEl=$('#titles');let activeBatch
 const VIDEO_STEPS=[
  {key:'script',label:'Script & scene plan',hint:'The selected text provider writes and reviews narration and scene plans, including custom drafts.'},
  {key:'images',label:'Find footage & create visuals',hint:'Prefer the closest Pexels or Pixabay clip, then a stock still or designed gradient fallback.'},
- {key:'clips',label:'Use footage & transitions',hint:'Each scene cut randomly uses opposing panel slices or shattered-glass shards.'},
+ {key:'clips',label:'Use footage & transitions',hint:'Scene cuts randomly use panel slices, glass shards, swish pans, light leaks, split wipes, or luma dissolves.'},
  {key:'audio',label:'Generate voice narration',hint:'Create narration at the selected Slow, Medium, or Faster pace.'},
  {key:'assembly',label:'Assemble scenes & transitions',hint:'Arrange scene timing and apply transitions.'},
  {key:'subtitles',label:'Create captions & SRT',hint:'Time English captions and save the subtitle file.'},
