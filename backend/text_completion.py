@@ -73,6 +73,16 @@ def _remote_completion(provider, model, api_key, system_prompt, user_prompt, tem
         raise RuntimeError(f"{PROVIDER_NAMES[provider]} returned an unusable JSON response for {task}: {exc}") from exc
 
 
+def _fallback_failure_summary(error, api_key="", limit=320):
+    """Make the hosted-provider failure visible without ever echoing a saved key."""
+    summary = " ".join(str(error or "Unknown provider failure").split())
+    if api_key:
+        summary = summary.replace(api_key, "[redacted]")
+    if len(summary) > limit:
+        summary = summary[:limit - 1].rstrip() + "…"
+    return summary
+
+
 def complete_json(provider, model, api_key, system_prompt, user_prompt, *, temperature, max_tokens, task, validator=None):
     """Return (JSON text, source label), falling back to local Qwen for failed hosted calls."""
     provider = str(provider or "openrouter").strip().lower()
@@ -89,7 +99,8 @@ def complete_json(provider, model, api_key, system_prompt, user_prompt, *, tempe
         try:
             content = local_chat_completion(system_prompt, user_prompt, temperature=temperature, max_tokens=max_tokens)
             _validate_json_object(content, validator)
-            return content, f"{PROVIDER_NAMES['local']} fallback after {PROVIDER_NAMES[provider]} failure"
+            reason = _fallback_failure_summary(primary_error, api_key)
+            return content, f"{PROVIDER_NAMES['local']} fallback after {PROVIDER_NAMES[provider]} failure: {reason}"
         except Exception as fallback_error:
             raise RuntimeError(
                 f"{PROVIDER_NAMES[provider]} failed ({primary_error}); local Qwen fallback could not complete this step ({fallback_error}). "
