@@ -329,18 +329,32 @@ class VideoAssembler:
         duration = float(audio.duration or 0.0)
         if duration <= 0.08:
             return audio
-        sample_rate = 8000
-        frame_samples = 80  # 10 ms RMS windows
-        times = np.arange(0.0, duration, 1.0 / sample_rate)
-        samples = np.asarray(audio.to_soundarray(tt=times, fps=sample_rate), dtype=np.float32)
-        if samples.ndim > 1:
-            samples = np.max(np.abs(samples), axis=1)
-        else:
-            samples = np.abs(samples)
-        usable = (len(samples) // frame_samples) * frame_samples
-        if usable < frame_samples:
+        sample_rate = 4000
+        frame_samples = 40  # 10 ms RMS windows
+        chunk_samples = sample_rate  # One-second reads stay within MoviePy's audio-reader buffer.
+        sample_count = int(duration * sample_rate)
+        rms_chunks = []
+        for offset in range(0, sample_count, chunk_samples):
+            end_sample = min(sample_count, offset + chunk_samples)
+            times = np.arange(offset, end_sample, dtype=np.float64) / sample_rate
+            try:
+                samples = np.asarray(audio.to_soundarray(tt=times, fps=sample_rate), dtype=np.float32)
+            except IndexError as exc:
+                # Silence trimming is an optimization; never fail video assembly because a
+                # decoder cannot sample a particular audio chunk. Keep the original clip.
+                print(f"[audio] Could not inspect a TTS edge chunk; preserving it unchanged: {exc}")
+                return audio
+            if samples.ndim > 1:
+                samples = np.max(np.abs(samples), axis=1)
+            else:
+                samples = np.abs(samples)
+            usable = (len(samples) // frame_samples) * frame_samples
+            if usable:
+                windows = samples[:usable].reshape(-1, frame_samples)
+                rms_chunks.append(np.sqrt(np.mean(windows ** 2, axis=1)))
+        if not rms_chunks:
             return audio
-        frame_rms = np.sqrt(np.mean(samples[:usable].reshape(-1, frame_samples) ** 2, axis=1))
+        frame_rms = np.concatenate(rms_chunks)
         peak = float(frame_rms.max(initial=0.0))
         if peak <= 1e-5:
             return audio
