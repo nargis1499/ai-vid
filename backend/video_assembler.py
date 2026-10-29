@@ -19,40 +19,70 @@ class VideoAssembler:
         self.last_video_encoder = None
 
     def _encode_video(self, final, path, logger, stage_callback=None, cancel_check=None):
+        import subprocess
+        from moviepy.config import FFMPEG_BINARY
+
         path = Path(path)
         label = "CPU libx264"
         temp_path = path.with_name(f"{path.stem}.x264-temp.mp4")
-        temp_audio = path.with_name(f"{path.stem}.x264-audio.m4a")
+        temp_audio = path.with_name(f"{path.stem}.x264-audio.wav")
+        video_only = None
         self.last_video_encoder = label
         if stage_callback:
-            stage_callback("encoding", "Encoding MP4 on the CPU with libx264 at 30 fps…")
+            stage_callback("encoding", "Encoding video on the CPU with libx264 and preparing continuous narration audio…")
         for stale in (temp_path, temp_audio):
             try:
                 stale.unlink()
             except OSError:
                 pass
         try:
-            final.write_videofile(
-                str(temp_path),
-                fps=30,
-                codec="libx264",
-                audio_codec="aac",
-                preset="medium",
-                threads=4,
-                logger=logger,
-                temp_audiofile=str(temp_audio),
+            if final.audio is not None:
+                final.audio.write_audiofile(
+                    str(temp_audio), fps=44100, nbytes=2, codec="pcm_s16le", logger=logger
+                )
+                if not temp_audio.is_file() or temp_audio.stat().st_size == 0:
+                    raise RuntimeError("The continuous narration audio track could not be written.")
+
+            # Encode video and audio separately, then encode audio once while muxing.
+            # MoviePy's AAC packet-copy mux can introduce a silent gap at scene boundaries.
+            video_only = final.set_audio(None)
+            video_only.write_videofile(
+                str(temp_path), fps=30, codec="libx264", audio=False,
+                preset="medium", threads=4, logger=logger,
             )
             if not temp_path.is_file() or temp_path.stat().st_size == 0:
                 raise RuntimeError("CPU libx264 did not produce a video file.")
-            os.replace(temp_path, path)
-            print(f"[video] Encoded {path.name} using {label}")
+
+            if temp_audio.is_file():
+                command = [
+                    FFMPEG_BINARY, "-y", "-hide_banner", "-loglevel", "error",
+                    "-i", str(temp_path), "-i", str(temp_audio),
+                    "-map", "0:v:0", "-map", "1:a:0",
+                    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                    "-t", f"{float(final.duration):.6f}", "-movflags", "+faststart",
+                    str(path),
+                ]
+                completed = subprocess.run(command, capture_output=True, text=True, check=False)
+                if completed.returncode:
+                    detail = (completed.stderr or f"FFmpeg exited with code {completed.returncode}").strip()[-700:]
+                    raise RuntimeError(f"Could not mux the continuous audio track into the CPU-encoded video: {detail}")
+            else:
+                os.replace(temp_path, path)
+            if not path.is_file() or path.stat().st_size == 0:
+                raise RuntimeError("FFmpeg did not produce a final MP4 file.")
+            print(f"[video] Encoded {path.name} using {label}; audio muxed as a continuous track")
             if stage_callback:
-                stage_callback("encoding", "CPU MP4 encoding complete with libx264.")
+                stage_callback("encoding", "CPU MP4 encoding and continuous audio mux complete.")
         except Exception:
             if cancel_check:
                 cancel_check()
             raise
         finally:
+            if video_only is not None:
+                try:
+                    video_only.close()
+                except Exception:
+                    pass
             for stale in (temp_path, temp_audio):
                 try:
                     stale.unlink()
@@ -81,7 +111,7 @@ class VideoAssembler:
             from moviepy.editor import (AudioFileClip, ImageClip, VideoClip, VideoFileClip,
                                         concatenate_audioclips, concatenate_videoclips, CompositeVideoClip)
             from moviepy.audio.AudioClip import CompositeAudioClip
-            from moviepy.audio.fx.all import audio_fadein, audio_fadeout, audio_loop
+            from moviepy.audio.fx.all import audio_fadein, audio_loop
             from moviepy.config import FFMPEG_BINARY
         except Exception as exc:
             details = str(exc)
@@ -119,6 +149,7 @@ class VideoAssembler:
 
         clips = []
         audios = []
+        voice_parts = []
         subtitle_clips = []
         music_clip = music_loop = mixed_audio = voice_track = None
         final = None
@@ -141,7 +172,11 @@ class VideoAssembler:
                 except Exception as exc:
                     raise RuntimeError(f"Could not decode narration audio for scene {i+1}: {exc}") from exc
 
-                speech_duration = max(0.1, float(audio.duration or 0.1))
+                voice_part = self._trim_scene_edge_silence(
+                    audio, trim_end=i < len(media_items) - 1
+                )
+                voice_parts.append(voice_part)
+                speech_duration = max(0.1, float(voice_part.duration or 0.1))
                 duration = max(2.0, speech_duration + 0.5)
                 speech_durations.append(speech_duration)
                 scene_durations.append(duration)
@@ -187,9 +222,9 @@ class VideoAssembler:
             final = concatenate_videoclips(
                 clips, method="compose", padding=-self.TRANSITION_DURATION
             )
-            # Concatenate source narration files in scene order as one uninterrupted track.
-            # The negative video padding/transition masks must never trim or blend voice audio.
-            voice_track = concatenate_audioclips(audios).set_duration(final.duration)
+            # Join voice segments after removing excess per-file TTS silence at scene edges.
+            # Video padding and transition masks must never trim or blend the narration.
+            voice_track = concatenate_audioclips(voice_parts).set_duration(final.duration)
             title = video_title or script.get("title") or "Video"
 
             # Captions use the exact revised narration and follow each scene's transition-aware start time.
@@ -225,13 +260,13 @@ class VideoAssembler:
                 music_message=f"Mixed {self.last_music_style} soundtrack; finalizing audio and visual fades…" if self.last_music_style else "Continuing with narration only; finalizing video and audio fades…"
                 stage_callback("music",music_message)
 
-            # Finish with a polished fade from black and fade to black, plus matching audio fades.
+            # Fade the picture at the video endpoints. Only fade audio at the file's
+            # opening; a composite-track fade-out can attenuate narration at scene joins.
             fade_in = min(1.1, final.duration / 3.0)
             fade_out = min(1.6, final.duration / 3.0)
             final = final.fadein(fade_in).fadeout(fade_out)
             if final.audio is not None:
                 faded_audio = audio_fadein(final.audio, min(0.8, final.duration / 3.0))
-                faded_audio = audio_fadeout(faded_audio, fade_out)
                 final = final.set_audio(faded_audio)
 
             path = DIRS["videos"] / f"{video_id}.mp4"
@@ -256,11 +291,49 @@ class VideoAssembler:
                     clip.close()
                 except Exception:
                     pass
-            for audio in audios:
+            closed_audio_ids = set()
+            for audio in voice_parts + audios:
+                if id(audio) in closed_audio_ids:
+                    continue
+                closed_audio_ids.add(id(audio))
                 try:
                     audio.close()
                 except Exception:
                     pass
+
+    @staticmethod
+    def _trim_scene_edge_silence(audio, trim_end=True):
+        """Compact inter-scene TTS padding while retaining the final clip's natural ending."""
+        import numpy as np
+
+        duration = float(audio.duration or 0.0)
+        if duration <= 0.08:
+            return audio
+        sample_rate = 8000
+        frame_samples = 80  # 10 ms RMS windows
+        times = np.arange(0.0, duration, 1.0 / sample_rate)
+        samples = np.asarray(audio.to_soundarray(tt=times, fps=sample_rate), dtype=np.float32)
+        if samples.ndim > 1:
+            samples = np.max(np.abs(samples), axis=1)
+        else:
+            samples = np.abs(samples)
+        usable = (len(samples) // frame_samples) * frame_samples
+        if usable < frame_samples:
+            return audio
+        frame_rms = np.sqrt(np.mean(samples[:usable].reshape(-1, frame_samples) ** 2, axis=1))
+        peak = float(frame_rms.max(initial=0.0))
+        if peak <= 1e-5:
+            return audio
+        active = np.flatnonzero(frame_rms >= max(1e-4, peak * 0.01))
+        if not len(active):
+            return audio
+
+        # Keep each complete 10 ms speech frame and remove only the silent frames around it.
+        start = float(active[0]) * 0.01
+        end = min(duration, float(active[-1] + 1) * 0.01) if trim_end else duration
+        if end - start < 0.08 or duration - (end - start) < 0.015:
+            return audio
+        return audio.subclip(start, end)
 
     @staticmethod
     def _apply_scene_transition(clip, style, duration, frame_size):
