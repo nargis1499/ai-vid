@@ -18,7 +18,7 @@ DEFAULTS = {
     "TEXT_PROVIDER": "openrouter",
     "TEXT_MODEL": "",
     "OPENROUTER_API_KEY": "",
-    "GROK_API_KEY": "",
+    "GROQ_API_KEY": "",
     "EDGE_TTS_VOICE": "en-US-AriaNeural",
     "PEXELS_API_KEY": "",
     "PIXABAY_API_KEY": "",
@@ -29,7 +29,7 @@ DEFAULTS = {
     "FFMPEG_BINARY": "ffmpeg-imageio",
     "OUTPUT_DIR": "",
 }
-SECRET_KEYS = {"PEXELS_API_KEY", "PIXABAY_API_KEY", "OPENROUTER_API_KEY", "GROK_API_KEY"}
+SECRET_KEYS = {"PEXELS_API_KEY", "PIXABAY_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY"}
 PUBLIC_KEYS = set(DEFAULTS) - SECRET_KEYS
 
 
@@ -38,16 +38,25 @@ def load_settings():
     for key in values:
         if key in os.environ:
             values[key] = _coerce_env(key, os.environ[key])
+    if "GROQ_API_KEY" not in os.environ and os.getenv("GROK_API_KEY"):
+        values["GROQ_API_KEY"] = os.getenv("GROK_API_KEY", "").strip()
     try:
         saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
         if isinstance(saved, dict):
             values.update({key: val for key, val in saved.items() if key in DEFAULTS})
+            # Migrate the earlier Grok-labelled provider and key to GroqCloud settings without exposing the saved secret.
+            if not saved.get("GROQ_API_KEY") and saved.get("GROK_API_KEY"):
+                values["GROQ_API_KEY"] = str(saved["GROK_API_KEY"]).strip()
+            if values["TEXT_PROVIDER"] == "grok":
+                values["TEXT_PROVIDER"] = "groq"
             if not values["TEXT_MODEL"]:
                 values["TEXT_MODEL"] = str(saved.get("OPENROUTER_MODEL") or os.getenv("OPENROUTER_MODEL", "")).strip()
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         if not values["TEXT_MODEL"]:
             values["TEXT_MODEL"] = os.getenv("OPENROUTER_MODEL", "").strip()
-    if values["TEXT_PROVIDER"] not in {"openrouter", "grok"}:
+    if values["TEXT_PROVIDER"] == "grok":
+        values["TEXT_PROVIDER"] = "groq"
+    if values["TEXT_PROVIDER"] not in {"openrouter", "groq"}:
         values["TEXT_PROVIDER"] = "openrouter"
     if not values["OUTPUT_DIR"]:
         if getattr(sys, "frozen", False):
@@ -63,15 +72,16 @@ def save_settings(updates):
         if key not in DEFAULTS:
             continue
         if key == "TEXT_PROVIDER":
-            current[key] = str(value or "openrouter").strip().lower()
+            provider = str(value or "openrouter").strip().lower()
+            current[key] = "groq" if provider == "grok" else provider
         elif key in {"MAX_UPLOADS_PER_DAY", "BATCH_DELAY_SECONDS"}:
             current[key] = int(value)
         elif key in SECRET_KEYS:
             current[key] = str(value or "").strip()
         else:
             current[key] = str(value).strip()
-    if current["TEXT_PROVIDER"] not in {"openrouter", "grok"}:
-        raise ValueError("Text provider must be OpenRouter or Grok.")
+    if current["TEXT_PROVIDER"] not in {"openrouter", "groq"}:
+        raise ValueError("Text provider must be OpenRouter or Groq.")
     if current["YOUTUBE_PRIVACY_STATUS"] not in {"private", "unlisted", "public"}:
         raise ValueError("YouTube privacy must be private, unlisted, or public.")
     if not 1 <= current["MAX_UPLOADS_PER_DAY"] <= 50:
@@ -102,7 +112,7 @@ def public_settings(settings=None):
     result["PEXELS_API_KEY_CONFIGURED"] = bool(settings.get("PEXELS_API_KEY"))
     result["PIXABAY_API_KEY_CONFIGURED"] = bool(settings.get("PIXABAY_API_KEY"))
     result["OPENROUTER_API_KEY_CONFIGURED"] = bool(settings.get("OPENROUTER_API_KEY"))
-    result["GROK_API_KEY_CONFIGURED"] = bool(settings.get("GROK_API_KEY"))
+    result["GROQ_API_KEY_CONFIGURED"] = bool(settings.get("GROQ_API_KEY"))
     result["YOUTUBE_CREDENTIALS_CONFIGURED"] = (APP_DATA_DIR / "client_secret.json").is_file() or (Path(__file__).resolve().parent / "client_secret.json").is_file()
     return result
 

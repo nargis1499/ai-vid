@@ -7,10 +7,10 @@ import requests
 
 
 class YouTubeSEO:
-    PROVIDER_NAMES = {"openrouter": "OpenRouter", "grok": "Grok (xAI)"}
+    PROVIDER_NAMES = {"openrouter": "OpenRouter", "groq": "Groq (GroqCloud)"}
     PROVIDER_URLS = {
         "openrouter": "https://openrouter.ai/api/v1/chat/completions",
-        "grok": "https://api.x.ai/v1/chat/completions",
+        "groq": "https://api.groq.com/openai/v1/chat/completions",
     }
 
     def __init__(self):
@@ -18,17 +18,17 @@ class YouTubeSEO:
             os.getenv("TEXT_PROVIDER", "openrouter"),
             os.getenv("TEXT_MODEL", "") or os.getenv("OPENROUTER_MODEL", ""),
             os.getenv("OPENROUTER_API_KEY", ""),
-            os.getenv("GROK_API_KEY", ""),
+            os.getenv("GROQ_API_KEY", ""),
         )
         self.last_source = ""
 
-    def configure(self, provider, model, openrouter_api_key="", grok_api_key=""):
+    def configure(self, provider, model, openrouter_api_key="", groq_api_key=""):
         self.provider = str(provider or "openrouter").strip().lower()
         if self.provider not in self.PROVIDER_URLS:
             self.provider = "openrouter"
         self.model = str(model or "").strip()
         self.provider_name = self.PROVIDER_NAMES[self.provider]
-        self.api_key = str(grok_api_key or "").strip() if self.provider == "grok" else str(openrouter_api_key or "").strip()
+        self.api_key = str(groq_api_key or "").strip() if self.provider == "groq" else str(openrouter_api_key or "").strip()
 
     def generate_seo_package(self, title: str, script: dict, niche: str) -> dict:
         if not self.api_key or not self.model:
