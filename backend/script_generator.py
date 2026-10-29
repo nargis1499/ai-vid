@@ -124,8 +124,9 @@ class ScriptGenerator:
         target_words = max(10, round(max(1, int(duration)) * 2.25))
         narration_budget = target_words * 3 // 2  # Approximate English word-to-token ratio.
         scene_metadata_budget = max(1, int(scene_count)) * 70
-        minimum = 4096 if self.provider == "groq" and "gpt-oss" in self.model.lower() else 2048
-        return min(6000, max(minimum, narration_budget + scene_metadata_budget + 500))
+        # The ceiling is not pre-consumed; it gives all providers enough room to finish
+        # structured JSON, while the duration estimate still bounds longer outputs.
+        return min(6000, max(4096, narration_budget + scene_metadata_budget + 500))
 
     def generate_custom_script(self, title: str, custom_text: str, duration: int) -> dict:
         """Use the selected hosted model to edit a custom draft and plan its scenes."""
