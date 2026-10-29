@@ -5,7 +5,7 @@ import requests
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont
 from common import DIRS
 from pixabay_client import PixabayClient
-from stock_search import image_quality_score, relevance_score, search_queries
+from stock_search import MIN_STOCK_RELEVANCE, image_quality_score, relevance_score, search_queries
 
 W,H=1280,720
 
@@ -31,7 +31,9 @@ class ImageGenerator:
         path=DIRS["images"]/f"scene_{index}.png"
         self.last_source=None
         queries=search_queries(scene,max_queries=2)
-        candidates=self._search_pexels(queries)+self._search_pixabay(queries)
+        match_queries=search_queries(scene,max_queries=8)
+        candidates=self._search_pexels(queries,match_queries)+self._search_pixabay(queries,match_queries)
+        candidates=[item for item in candidates if item["relevance"]>=MIN_STOCK_RELEVANCE]
         adequate=[item for item in candidates if item["width"]>=640 and item["height"]>=360]
         if adequate:
             candidates=adequate
@@ -54,7 +56,8 @@ class ImageGenerator:
         self._gradient(scene.get("text_overlay") or scene.get("search_keywords") or "Explore",path)
         return str(path)
 
-    def _search_pexels(self, queries):
+    def _search_pexels(self, queries, match_queries=None):
+        match_queries=match_queries or queries
         if not self.api_key:
             return []
         candidates=[];seen=set()
@@ -82,15 +85,16 @@ class ImageGenerator:
                 if not url or url in seen:
                     continue
                 seen.add(url)
-                metadata=" ".join((str(photo.get("alt") or ""),str(photo.get("url") or ""),str(photo.get("photographer") or "")))
+                metadata=" ".join((str(photo.get("alt") or ""),str(photo.get("url") or "")))
                 candidates.append({
                     "provider":"Pexels","url":url,"metadata":metadata,"width":width,"height":height,
-                    "quality":image_quality_score(width,height),"relevance":relevance_score(queries,metadata),
+                    "quality":image_quality_score(width,height),"relevance":relevance_score(match_queries,metadata),
                     "query_rank":query_rank,"rank":rank,
                 })
         return candidates
 
-    def _search_pixabay(self, queries):
+    def _search_pixabay(self, queries, match_queries=None):
+        match_queries=match_queries or queries
         if not self.pixabay.api_key:
             return []
         candidates=[];seen=set()
@@ -112,10 +116,10 @@ class ImageGenerator:
                 if not url or url in seen:
                     continue
                 seen.add(url)
-                metadata=" ".join((str(photo.get("tags") or ""),str(photo.get("type") or ""),str(photo.get("user") or "")))
+                metadata=" ".join((str(photo.get("tags") or ""),str(photo.get("type") or "")))
                 candidates.append({
                     "provider":"Pixabay","url":url,"metadata":metadata,"width":width,"height":height,
-                    "quality":image_quality_score(width,height),"relevance":relevance_score(queries,metadata),
+                    "quality":image_quality_score(width,height),"relevance":relevance_score(match_queries,metadata),
                     "query_rank":query_rank,"rank":rank,
                 })
         return candidates
