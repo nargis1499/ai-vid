@@ -1,11 +1,10 @@
 """Pexels/Pixabay stock imagery and designed gradient fallbacks."""
 import io, random, textwrap
-from pathlib import Path
 import requests
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont
 from common import DIRS
 from pixabay_client import PixabayClient
-from stock_search import MIN_STOCK_RELEVANCE, image_quality_score, relevance_score, search_queries
+from stock_search import EARLY_STOP_SEMANTIC_RELEVANCE, rank_stock_candidates, search_queries, technical_suitability_score
 
 W,H=1280,720
 
@@ -27,37 +26,57 @@ class ImageGenerator:
         self.api_key=__import__('os').getenv("PEXELS_API_KEY","").strip()
         self.pixabay=PixabayClient(__import__('os').getenv("PIXABAY_API_KEY", ""))
         self.last_source=None
+        self.last_selection=None
+        self._used_assets=set()
     def generate_scene_image(self, scene:dict, index:int)->str:
         path=DIRS["images"]/f"scene_{index}.png"
         self.last_source=None
-        queries=search_queries(scene,max_queries=2)
-        match_queries=search_queries(scene,max_queries=8)
-        candidates=self._search_pexels(queries,match_queries)+self._search_pixabay(queries,match_queries)
-        candidates=[item for item in candidates if item["relevance"]>=MIN_STOCK_RELEVANCE]
-        adequate=[item for item in candidates if item["width"]>=640 and item["height"]>=360]
-        if adequate:
-            candidates=adequate
-        candidates.sort(key=lambda item:(
-            -(item["relevance"]+(0.04 if item["provider"]=="Pexels" else 0.0)),
-            -item["quality"],0 if item["provider"]=="Pexels" else 1,
-            item["query_rank"],item["rank"],
-        ))
-        for selected in candidates:
+        self.last_selection=None
+        queries=search_queries(scene,max_queries=5)
+        candidates=[]
+        for query_rank,query in enumerate(queries):
+            found=self._search_pexels([query])+self._search_pixabay([query])
+            for item in found:
+                item["query_rank"]=query_rank
+            candidates.extend(found)
+            if query_rank>=1 and len(rank_stock_candidates(
+                scene,candidates,media_type="image",min_semantic=EARLY_STOP_SEMANTIC_RELEVANCE,
+                used_assets=self._used_assets
+            ))>=3:
+                break
+        ranked=rank_stock_candidates(scene,candidates,media_type="image",used_assets=self._used_assets)
+        for selected in ranked:
             try:
                 response=requests.get(selected["url"],timeout=30);response.raise_for_status()
                 image=_cover(Image.open(io.BytesIO(response.content)))
                 image=ImageEnhance.Contrast(image).enhance(1.05)
                 image=self._overlay(image,scene.get("text_overlay",""));image.save(path)
+                selected["accessible"]=True
+                selected_technical=technical_suitability_score(
+                    width=selected.get("width"),height=selected.get("height"),
+                    orientation=(scene.get("visual_plan") or {}).get("required_orientation","landscape"),
+                    accessible=True,media_type="image",
+                )
                 self.last_source=selected["provider"]
+                metadata=selected.get("metadata") if isinstance(selected.get("metadata"),dict) else {}
+                self.last_selection={
+                    "provider":selected["provider"],"identity":selected.get("identity"),
+                    "query":selected.get("query"),"title":metadata.get("title", ""),
+                    "semantic_relevance":selected["semantic_relevance"],
+                    "technical_suitability":selected_technical["score"],"accessible":True,
+                    "final_rank":selected["final_rank"],"stable_key":selected["stable_key"],
+                }
+                self._used_assets.update(selected.get("stable_keys") or ([selected["stable_key"]] if selected.get("stable_key") else []))
                 return str(path)
             except Exception as exc:
+                selected["accessible"]=False
                 print(f"[images] Could not download a ranked {selected['provider']} still: {exc}")
         self.last_source="Gradient"
+        self.last_selection={"fallback":True,"reason":"no semantically acceptable accessible stock image"}
         self._gradient(scene.get("text_overlay") or scene.get("search_keywords") or "Explore",path)
         return str(path)
 
-    def _search_pexels(self, queries, match_queries=None):
-        match_queries=match_queries or queries
+    def _search_pexels(self, queries):
         if not self.api_key:
             return []
         candidates=[];seen=set()
@@ -85,16 +104,16 @@ class ImageGenerator:
                 if not url or url in seen:
                     continue
                 seen.add(url)
-                metadata=" ".join((str(photo.get("alt") or ""),str(photo.get("url") or "")))
+                photo_url=str(photo.get("url") or "")
+                slug=photo_url.rstrip("/").rsplit("/",1)[-1].replace("-"," ")
+                metadata={"title":slug,"description":photo.get("alt") or ""}
                 candidates.append({
-                    "provider":"Pexels","url":url,"metadata":metadata,"width":width,"height":height,
-                    "quality":image_quality_score(width,height),"relevance":relevance_score(match_queries,metadata),
-                    "query_rank":query_rank,"rank":rank,
+                    "provider":"Pexels","identity":photo.get("id"),"url":url,"metadata":metadata,
+                    "width":width,"height":height,"query":query,"query_rank":query_rank,"rank":rank,
                 })
         return candidates
 
-    def _search_pixabay(self, queries, match_queries=None):
-        match_queries=match_queries or queries
+    def _search_pixabay(self, queries):
         if not self.pixabay.api_key:
             return []
         candidates=[];seen=set()
@@ -116,11 +135,10 @@ class ImageGenerator:
                 if not url or url in seen:
                     continue
                 seen.add(url)
-                metadata=" ".join((str(photo.get("tags") or ""),str(photo.get("type") or "")))
+                metadata={"title":photo.get("title") or "","tags":photo.get("tags") or "","type":photo.get("type") or ""}
                 candidates.append({
-                    "provider":"Pixabay","url":url,"metadata":metadata,"width":width,"height":height,
-                    "quality":image_quality_score(width,height),"relevance":relevance_score(match_queries,metadata),
-                    "query_rank":query_rank,"rank":rank,
+                    "provider":"Pixabay","identity":photo.get("id"),"url":url,"metadata":metadata,
+                    "width":width,"height":height,"query":query,"query_rank":query_rank,"rank":rank,
                 })
         return candidates
 

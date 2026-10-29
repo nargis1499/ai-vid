@@ -1,0 +1,540 @@
+[
+  {
+    "name": "neighbor greeting versus business meeting",
+    "scene": {
+      "narration": "A friendly greeting helps neighbors feel welcome.",
+      "visual_plan": {
+        "visible_action": "Two neighbors greet each other with a wave.",
+        "visual_objective": "Two neighbors greeting outside a suburban home.",
+        "subjects": [
+          "two neighbors"
+        ],
+        "setting": "suburban home exterior",
+        "primary_query": "neighbors greeting outside home",
+        "alternative_queries": [
+          "neighbor waving in front yard"
+        ]
+      }
+    },
+    "candidates": [
+      {
+        "provider": "Pexels",
+        "identity": "greet-1",
+        "title": "Neighbors greeting outside home",
+        "metadata": {
+          "title": "neighbors greeting outside home",
+          "description": "Two people wave at a suburban house"
+        },
+        "url": "https://media.example/greet-1.mp4?token=abc",
+        "query": "neighbors greeting outside home",
+        "width": 1280,
+        "height": 720,
+        "duration": 12,
+        "rank": 5
+      },
+      {
+        "provider": "Pixabay",
+        "identity": "meeting-1",
+        "title": "Business meeting",
+        "metadata": {
+          "tags": "business meeting, people talking around table",
+          "type": "meeting"
+        },
+        "url": "https://media.example/meeting-1.mp4",
+        "query": "neighbors greeting outside home",
+        "width": 1920,
+        "height": 1080,
+        "duration": 10,
+        "rank": 1
+      }
+    ],
+    "expected_title": "Neighbors greeting outside home",
+    "expected_identity": "greet-1"
+  },
+  {
+    "name": "neighbor helping versus warehouse workers",
+    "scene": {
+      "narration": "Offer practical help when a neighbor is carrying groceries.",
+      "visual_plan": {
+        "visible_action": "One neighbor helps another carry grocery bags to the door.",
+        "visual_objective": "A neighbor helping someone with groceries at a home entrance.",
+        "subjects": [
+          "two neighbors",
+          "grocery bags"
+        ],
+        "setting": "residential front door",
+        "primary_query": "neighbor helping carry groceries home",
+        "alternative_queries": [
+          "neighbors carrying bags to house"
+        ]
+      }
+    },
+    "candidates": [
+      {
+        "provider": "Pixabay",
+        "identity": "help-1",
+        "title": "Neighbor carries groceries",
+        "metadata": {
+          "tags": "neighbor helping carry grocery bags to front door",
+          "type": "people"
+        },
+        "url": "https://media.example/help-1.mp4",
+        "query": "neighbor helping carry groceries home",
+        "width": 1280,
+        "height": 720,
+        "duration": 11,
+        "rank": 6
+      },
+      {
+        "provider": "Pexels",
+        "identity": "warehouse-1",
+        "title": "Warehouse workers",
+        "metadata": {
+          "title": "warehouse workers carrying boxes",
+          "description": "industrial warehouse staff at work"
+        },
+        "url": "https://media.example/warehouse-1.mp4",
+        "query": "neighbor helping carry groceries home",
+        "width": 1920,
+        "height": 1080,
+        "duration": 12,
+        "rank": 1
+      }
+    ],
+    "expected_title": "Neighbor carries groceries",
+    "expected_identity": "help-1"
+  },
+  {
+    "name": "calm disagreement versus physical fight",
+    "scene": {
+      "narration": "Stay calm while discussing a disagreement about a shared fence.",
+      "visual_plan": {
+        "visible_action": "Two neighbors calmly discuss a fence between their yards.",
+        "visual_objective": "A calm discussion between neighbors beside a shared backyard fence.",
+        "subjects": [
+          "two neighbors",
+          "wooden fence"
+        ],
+        "setting": "shared backyard",
+        "primary_query": "neighbors calmly discussing fence",
+        "alternative_queries": [
+          "homeowners talking beside yard fence"
+        ]
+      }
+    },
+    "candidates": [
+      {
+        "provider": "Pexels",
+        "identity": "calm-1",
+        "title": "Neighbors discuss a fence",
+        "metadata": {
+          "title": "neighbors calmly discussing wooden fence",
+          "description": "Two homeowners talk in a backyard"
+        },
+        "url": "https://media.example/calm-1.mp4",
+        "query": "neighbors calmly discussing fence",
+        "width": 1280,
+        "height": 720,
+        "duration": 15,
+        "rank": 5
+      },
+      {
+        "provider": "Pixabay",
+        "identity": "fight-1",
+        "title": "Street fight",
+        "metadata": {
+          "tags": "two men fighting, punch, violence",
+          "type": "action"
+        },
+        "url": "https://media.example/fight-1.mp4",
+        "query": "neighbors calmly discussing fence",
+        "width": 1920,
+        "height": 1080,
+        "duration": 10,
+        "rank": 1
+      }
+    ],
+    "expected_title": "Neighbors discuss a fence",
+    "expected_identity": "calm-1"
+  },
+  {
+    "name": "respecting privacy versus surveillance footage",
+    "scene": {
+      "narration": "Respect privacy by giving your neighbor space.",
+      "visual_plan": {
+        "visible_action": "A neighbor politely gives another person space at a doorway.",
+        "visual_objective": "A respectful neighbor interaction with personal space at a home entrance.",
+        "subjects": [
+          "two neighbors"
+        ],
+        "setting": "residential doorway",
+        "core_meaning": "Respect boundaries and privacy.",
+        "primary_query": "neighbor giving another person space doorway",
+        "alternative_queries": [
+          "neighbors ending a conversation politely outside"
+        ]
+      }
+    },
+    "candidates": [
+      {
+        "provider": "Pixabay",
+        "identity": "space-1",
+        "title": "Neighbor gives space",
+        "metadata": {
+          "tags": "neighbor politely giving another person space at doorway",
+          "type": "people"
+        },
+        "url": "https://media.example/space-1.mp4",
+        "query": "neighbor giving another person space doorway",
+        "width": 1280,
+        "height": 720,
+        "duration": 9,
+        "rank": 4
+      },
+      {
+        "provider": "Pexels",
+        "identity": "surveil-1",
+        "title": "Security camera surveillance",
+        "metadata": {
+          "title": "security camera surveillance at doorway",
+          "description": "CCTV monitoring a person"
+        },
+        "url": "https://media.example/surveil-1.mp4",
+        "query": "neighbor giving another person space doorway",
+        "width": 1920,
+        "height": 1080,
+        "duration": 11,
+        "rank": 1
+      }
+    ],
+    "expected_title": "Neighbor gives space",
+    "expected_identity": "space-1"
+  },
+  {
+    "name": "phone messaging versus unrelated computer use",
+    "scene": {
+      "narration": "Send a brief text message to coordinate a neighborhood plan.",
+      "visual_plan": {
+        "visible_action": "A person types a short message on a smartphone at home.",
+        "visual_objective": "A neighbor sends a text message using a phone outside a home.",
+        "subjects": [
+          "person",
+          "smartphone"
+        ],
+        "setting": "front porch",
+        "primary_query": "person texting on smartphone porch",
+        "alternative_queries": [
+          "homeowner typing message on phone outdoors"
+        ]
+      }
+    },
+    "candidates": [
+      {
+        "provider": "Pexels",
+        "identity": "phone-1",
+        "title": "Texting on smartphone",
+        "metadata": {
+          "title": "person texting on smartphone",
+          "description": "typing a text message outside a house"
+        },
+        "url": "https://media.example/phone-1.mp4",
+        "query": "person texting on smartphone porch",
+        "width": 1280,
+        "height": 720,
+        "duration": 10,
+        "rank": 4
+      },
+      {
+        "provider": "Pixabay",
+        "identity": "computer-1",
+        "title": "Computer typing",
+        "metadata": {
+          "tags": "person typing on computer keyboard, laptop screen",
+          "type": "technology"
+        },
+        "url": "https://media.example/computer-1.mp4",
+        "query": "person texting on smartphone porch",
+        "width": 1920,
+        "height": 1080,
+        "duration": 10,
+        "rank": 1
+      }
+    ],
+    "expected_title": "Texting on smartphone",
+    "expected_identity": "phone-1"
+  },
+  {
+    "name": "shared garden cleanup versus industrial cleaning",
+    "scene": {
+      "narration": "Keep shared outdoor spaces clean and welcoming.",
+      "visual_plan": {
+        "visible_action": "Neighbors tidy a shared garden and clear leaves from a path.",
+        "visual_objective": "Residents cleaning a community garden together.",
+        "subjects": [
+          "neighbors",
+          "garden",
+          "leaves"
+        ],
+        "setting": "community garden",
+        "primary_query": "neighbors cleaning shared garden",
+        "alternative_queries": [
+          "residents tidying garden path"
+        ]
+      }
+    },
+    "candidates": [
+      {
+        "provider": "Pixabay",
+        "identity": "garden-1",
+        "title": "Neighbors clean garden path",
+        "metadata": {
+          "tags": "neighbors cleaning garden path, removing leaves, community garden",
+          "type": "nature"
+        },
+        "url": "https://media.example/garden-1.mp4",
+        "query": "neighbors cleaning shared garden",
+        "width": 1280,
+        "height": 720,
+        "duration": 10,
+        "rank": 7
+      },
+      {
+        "provider": "Pexels",
+        "identity": "industrial-clean-1",
+        "title": "Industrial floor cleaning",
+        "metadata": {
+          "title": "industrial warehouse floor cleaning machine",
+          "description": "factory cleaning crew at work"
+        },
+        "url": "https://media.example/industrial-clean-1.mp4",
+        "query": "neighbors cleaning shared garden",
+        "width": 1920,
+        "height": 1080,
+        "duration": 10,
+        "rank": 1
+      }
+    ],
+    "expected_title": "Neighbors clean garden path",
+    "expected_identity": "garden-1"
+  },
+  {
+    "name": "relevant low-resolution clip beats irrelevant high-resolution clip",
+    "scene": {
+      "narration": "Meet neighbors with a warm greeting.",
+      "visual_plan": {
+        "visible_action": "Two neighbors wave and greet each other outside.",
+        "visual_objective": "Neighbors greeting beside a residential home.",
+        "subjects": [
+          "neighbors"
+        ],
+        "setting": "outside a home",
+        "primary_query": "neighbors greeting outside home",
+        "alternative_queries": [
+          "neighbor waving outside house"
+        ]
+      }
+    },
+    "candidates": [
+      {
+        "provider": "Pixabay",
+        "identity": "lowres-greet",
+        "title": "Neighbors greet outside home",
+        "metadata": {
+          "tags": "neighbors greeting outside house, waving hello",
+          "type": "people"
+        },
+        "url": "https://media.example/lowres-greet.mp4",
+        "query": "neighbors greeting outside home",
+        "width": 480,
+        "height": 270,
+        "duration": 10,
+        "rank": 8
+      },
+      {
+        "provider": "Pexels",
+        "identity": "hires-office",
+        "title": "Office team meeting",
+        "metadata": {
+          "title": "office team meeting in boardroom",
+          "description": "business people talking around table"
+        },
+        "url": "https://media.example/hires-office.mp4",
+        "query": "neighbors greeting outside home",
+        "width": 3840,
+        "height": 2160,
+        "duration": 10,
+        "rank": 1
+      }
+    ],
+    "expected_title": "Neighbors greet outside home",
+    "expected_identity": "lowres-greet"
+  },
+  {
+    "name": "missing titles and tags with useful description evidence",
+    "scene": {
+      "narration": "Listen while a neighbor explains a concern.",
+      "visual_plan": {
+        "visible_action": "One neighbor listens attentively as another explains a concern.",
+        "visual_objective": "Two neighbors talking calmly beside a garden fence.",
+        "subjects": [
+          "two neighbors"
+        ],
+        "setting": "front garden",
+        "primary_query": "neighbor listening attentively garden",
+        "alternative_queries": [
+          "two homeowners talking beside fence"
+        ]
+      }
+    },
+    "candidates": [
+      {
+        "provider": "Pexels",
+        "identity": "listen-1",
+        "title": "",
+        "metadata": {
+          "description": "One neighbor listens attentively to another person in a front garden"
+        },
+        "url": "https://media.example/listen-1.mp4",
+        "query": "neighbor listening attentively garden",
+        "width": 1280,
+        "height": 720,
+        "duration": 12,
+        "rank": 3
+      },
+      {
+        "provider": "Pixabay",
+        "identity": "blank-1",
+        "title": "No metadata",
+        "metadata": {},
+        "url": "https://media.example/blank-1.mp4",
+        "query": "neighbor listening attentively garden",
+        "width": 1920,
+        "height": 1080,
+        "duration": 10,
+        "rank": 1
+      }
+    ],
+    "expected_title": "",
+    "expected_identity": "listen-1"
+  },
+  {
+    "name": "same media returned by multiple providers and queries",
+    "scene": {
+      "narration": "Greet neighbors outside the home.",
+      "visual_plan": {
+        "visible_action": "Two neighbors wave hello outside a home.",
+        "visual_objective": "Neighbors greeting outside a suburban house.",
+        "subjects": [
+          "neighbors"
+        ],
+        "setting": "home exterior",
+        "primary_query": "neighbors greeting outside house",
+        "alternative_queries": [
+          "neighbor waving in front yard"
+        ]
+      }
+    },
+    "candidates": [
+      {
+        "provider": "Pexels",
+        "identity": "duplicate-1",
+        "title": "Neighbors wave hello",
+        "metadata": {
+          "title": "neighbors wave hello",
+          "description": "outside a home"
+        },
+        "url": "https://media.example/shared.mp4?source=pexels",
+        "query": "neighbors greeting outside house",
+        "query_rank": 0,
+        "width": 1280,
+        "height": 720,
+        "duration": 10,
+        "rank": 2
+      },
+      {
+        "provider": "Pixabay",
+        "identity": "duplicate-99",
+        "title": "Neighbors greet outside",
+        "metadata": {
+          "tags": "neighbors greeting outside home"
+        },
+        "url": "https://media.example/shared.mp4?source=pixabay",
+        "query": "neighbor waving in front yard",
+        "query_rank": 1,
+        "width": 1920,
+        "height": 1080,
+        "duration": 10,
+        "rank": 4
+      },
+      {
+        "provider": "Pixabay",
+        "identity": "unique-1",
+        "title": "Different neighbor greeting",
+        "metadata": {
+          "tags": "neighbors greet wave outside suburban house in front yard hello"
+        },
+        "url": "https://media.example/unique.mp4",
+        "query": "neighbor waving in front yard",
+        "query_rank": 1,
+        "width": 1280,
+        "height": 720,
+        "duration": 10,
+        "rank": 9
+      }
+    ],
+    "expected_title": "Neighbors wave hello",
+    "expected_unique_candidates": 2,
+    "expected_identity": "duplicate-1"
+  },
+  {
+    "name": "all candidates are poor and fallback is required",
+    "scene": {
+      "narration": "Neighbors greet each other outside.",
+      "visual_plan": {
+        "visible_action": "Two neighbors greet each other outside a home.",
+        "visual_objective": "Neighbors greeting in a residential setting.",
+        "subjects": [
+          "neighbors"
+        ],
+        "setting": "home exterior",
+        "primary_query": "neighbors greeting outside home",
+        "alternative_queries": [
+          "neighbor waving in yard"
+        ]
+      }
+    },
+    "candidates": [
+      {
+        "provider": "Pexels",
+        "identity": "poor-office",
+        "title": "Office meeting",
+        "metadata": {
+          "title": "office meeting with people talking",
+          "description": "corporate team conference"
+        },
+        "url": "https://media.example/poor-office.mp4",
+        "query": "neighbors greeting outside home",
+        "width": 1920,
+        "height": 1080,
+        "duration": 10,
+        "rank": 1
+      },
+      {
+        "provider": "Pixabay",
+        "identity": "poor-city",
+        "title": "City skyline",
+        "metadata": {
+          "tags": "city skyline, traffic at night"
+        },
+        "url": "https://media.example/poor-city.mp4",
+        "query": "neighbor waving in yard",
+        "width": 1280,
+        "height": 720,
+        "duration": 10,
+        "rank": 2
+      }
+    ],
+    "expected_title": null,
+    "expected_identity": null
+  }
+]
