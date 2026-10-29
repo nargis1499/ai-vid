@@ -30,7 +30,7 @@ Settings and API keys are stored per-user under `%APPDATA%\CreatorFlow\settings.
 
 ## Local Qwen model (no Ollama)
 
-Settings includes a **Download Qwen3 model** option for `Qwen3-1.7B-Q4_K_M.gguf`. The model is downloaded to the per-user CreatorFlow data folder, never into Git or the application bundle. The local GGUF runs on CPU through `llama-cpp-python`/llama.cpp; Ollama is not used. Desktop builds include the CPU runtime. For a source install, add it with `python -m pip install -r backend/requirements-local.txt` (or install `backend/requirements-desktop.txt` for a desktop build).
+Settings includes a **Download Qwen3 model** option for `Qwen3-1.7B-Q4_K_M.gguf`. The model is downloaded to the per-user CreatorFlow data folder, never into Git or the application bundle. The local GGUF runs on CPU through `llama-cpp-python`/llama.cpp; Ollama is not used. New source installs from `backend/requirements.txt` and desktop builds include the CPU runtime. To add it to an existing source environment, run `python -m pip install -r backend/requirements-local.txt` and restart CreatorFlow.
 
 Qwen is a text model: it can generate scripts, scenes, SEO metadata, and thumbnail copy, but it does not create images or speech. Visuals continue to use Pexels/Pixabay and the designed fallback; narration still uses hosted Edge TTS and needs internet. Stock search, YouTube publishing, and other non-text services are not replaced by Qwen.
 
@@ -53,7 +53,7 @@ Qwen is a text model: it can generate scripts, scenes, SEO metadata, and thumbna
 
 - **Text model list does not load:** check the app host's internet connection and the selected provider's model-catalog access. OpenRouter lists free text models; Groq discovery requires a valid GroqCloud API key.
 - **Script generation fails:** check that the selected provider/model is set in Settings and that its API key/account quota is valid. For automatic fallback, download Qwen3 in Settings and use a desktop build with the llama.cpp CPU runtime installed.
-- **Local Qwen unavailable:** check the model download status in Settings. If the GGUF is present but inference cannot start, reinstall/build with `backend/requirements-desktop.txt`; the model download and llama.cpp runtime are separate.
+- **Local Qwen unavailable:** check the model and runtime statuses in Settings. If the GGUF is present but the runtime is unavailable, source installs should run `python -m pip install -r backend/requirements-local.txt` and restart; desktop users need a build that includes local Qwen support.
 - **No voiceover:** Edge TTS is hosted and requires internet access. Check the selected voice and retry; the app will not use a local voice model.
 - **No stock visuals:** add a valid Pexels or Pixabay key in Settings; a designed gradient fallback is used when stock is unavailable.
 - **MP4 export says MoviePy/FFmpeg is required:** set FFmpeg executable to `ffmpeg-imageio` (default) or its full path. For source installs, reinstall `moviepy==1.0.3` and `imageio-ffmpeg` in the backend environment.

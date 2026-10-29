@@ -2,4 +2,3 @@
 pywebview==5.4
 pythonnet==3.0.5
 pyinstaller==6.11.1
--r requirements-local.txt

@@ -4,7 +4,7 @@ import os
 import re
 
 from text_completion import complete_json
-from local_qwen import is_ready as local_qwen_is_ready
+from local_qwen import readiness_message as local_qwen_readiness_message
 
 
 class ScriptGenerator:
@@ -39,8 +39,9 @@ class ScriptGenerator:
 
     def _require_provider(self):
         if self.provider == "local":
-            if not local_qwen_is_ready():
-                raise RuntimeError("Local Qwen is selected, but its GGUF model or llama.cpp runtime is not ready. Download the model in Settings and install local Qwen support.")
+            message = local_qwen_readiness_message()
+            if message != "Local Qwen is ready.":
+                raise RuntimeError(message)
             return
         # Hosted-provider failures are handled by the shared client, which can fall back to Qwen.
 

@@ -1,5 +1,4 @@
 """Local Qwen3 GGUF inference and optional model download (no Ollama required)."""
-import importlib.util
 import os
 import re
 import threading
@@ -68,10 +67,13 @@ def _resolve_model_url() -> tuple[str, str]:
 
 
 def runtime_status() -> dict:
+    runtime_error = ""
     try:
-        runtime_available = importlib.util.find_spec("llama_cpp") is not None
-    except (ImportError, ValueError):
+        from llama_cpp import Llama  # noqa: F401 - import tests the native runtime too
+        runtime_available = True
+    except Exception as exc:
         runtime_available = False
+        runtime_error = f"{type(exc).__name__}: {exc}"
     path = model_path()
     with _download_lock:
         result = dict(_download_state)
@@ -80,6 +82,7 @@ def runtime_status() -> dict:
         "model_path": str(path),
         "model_available": _has_gguf_header(path),
         "runtime_available": runtime_available,
+        "runtime_error": runtime_error,
     })
     if result["model_available"] and result["status"] != "downloading":
         result["status"] = "ready"
@@ -90,6 +93,19 @@ def runtime_status() -> dict:
 def is_ready() -> bool:
     status = runtime_status()
     return bool(status["model_available"] and status["runtime_available"])
+
+
+def readiness_message(status=None) -> str:
+    status = status or runtime_status()
+    problems = []
+    if not status.get("model_available"):
+        problems.append("Qwen3 is not downloaded; download it in Settings → Local Qwen")
+    if not status.get("runtime_available"):
+        detail = status.get("runtime_error")
+        runtime = "llama.cpp runtime is unavailable" + (f" ({detail})" if detail else "")
+        runtime += ". Source install: pip install -r backend/requirements-local.txt; packaged app: install a build with Local Qwen support"
+        problems.append(runtime)
+    return "; ".join(problems) or "Local Qwen is ready."
 
 
 def start_model_download() -> dict:

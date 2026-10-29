@@ -239,7 +239,7 @@ async function loadLocalModelStatus(){
   const downloading=status.status==='downloading',available=Boolean(status.model_available),button=$('#download-qwen-model');
   $('#local-model-state').textContent=downloading?'Downloading Qwen3 model…':available?'Qwen3 1.7B Q4_K_M is downloaded':status.status==='failed'?'Download failed':'Qwen3 model is not downloaded';
   $('#local-model-path').textContent=status.model_path||'';
-  $('#local-runtime-state').textContent=status.runtime_available?'llama.cpp CPU runtime is installed.':`Local runtime is missing. Source users: install backend/requirements-local.txt; desktop users: install a build with local Qwen support. ${status.error||''}`;
+  $('#local-runtime-state').textContent=status.runtime_available?'llama.cpp CPU runtime is ready.':`Local runtime is unavailable (${status.runtime_error||'llama_cpp could not be imported'}). Source install: pip install -r backend/requirements-local.txt; desktop: install a build with Local Qwen support.`;
   button.disabled=downloading||available;button.textContent=downloading?'Downloading…':available?'Model downloaded':status.status==='failed'?'Retry model download':'Download Qwen3 model';
   const progress=$('#local-model-progress');progress.hidden=!downloading;
   if(downloading){
