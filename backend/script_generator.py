@@ -87,29 +87,34 @@ class ScriptGenerator:
             raise RuntimeError(f"{self.provider_name} did not return a usable response while {task}. Try another text model.") from exc
 
     def generate_script(self, title: str, duration: int) -> dict:
-        """Ask the selected provider to draft, then review/finalize, the script and scene plan."""
-        count = max(1, min(24, int(duration) // 10))
-        candidate = self._generate_text_draft(title, duration, count)
-        if not isinstance(candidate.get("scenes"), list) or not candidate["scenes"]:
-            raise RuntimeError(f"{self.provider_name} returned no script scenes. Choose another model and try again.")
-        if not any(isinstance(scene, dict) and str(scene.get("narration") or "").strip() for scene in candidate["scenes"]):
-            raise RuntimeError(f"{self.provider_name} returned no narration text. Choose another model and try again.")
-        source = json.dumps({
-            "video_title": str(title),
-            "target_duration_seconds": int(duration),
-            "provider_draft": candidate,
-        }, ensure_ascii=False)
-        reviewed = self._review_draft(title, source, duration, source_label=f"{self.provider_name} draft")
-        self.last_source = f"{self.provider_name} · {self.model} (draft + review)"
-        return reviewed
-
-    def _generate_text_draft(self, title: str, duration: int, count: int) -> dict:
-        prompt = f'''Create a compelling YouTube narration and scene plan for this title: {title!r}. Target total narration duration: {int(duration)} seconds. Write engaging, accurate spoken narration. Return ONLY valid JSON with this exact structure: {{"title":"...","description":"...","scenes":[{{"scene_number":1,"duration":8,"narration":"2-3 natural spoken sentences","visual_description":"specific cinematic visual","search_keywords":"2-4 concrete subject/action terms","search_queries":["2-3 short stock-search phrases, each 2-5 words, using distinct natural synonyms or visible details"],"text_overlay":"short phrase"}}],"tags":["tag"]}}. Search phrases must describe visible subjects, actions, and settings, avoid abstract ideas and duplicates, and must not invent details absent from the scene. Create exactly {count} scenes; scene durations should add up to about {int(duration)} seconds. Do not include markdown or text outside the JSON object.'''
+        """Generate the final narration and scene plan in one provider request."""
+        duration = max(1, int(duration))
+        scene_count = max(1, min(24, duration // 10))
+        target_words = max(10, round(duration * 2.25))
+        prompt = f'''Create the FINAL, production-ready YouTube narration and scene plan for this title: {title!r}. Target total narration duration: {duration} seconds, about {target_words} spoken words at a natural pace. Write a compelling hook, a coherent progression with natural transitions, and a satisfying ending. Be accurate, useful, and engaging; do not invent facts, statistics, examples, or citations. Narration must be TTS-ready spoken words only, with no headings, stage directions, or visual instructions. Return ONLY valid JSON with this exact structure: {{"title":"...","description":"short video summary","tags":["tag"],"scenes":[{{"scene_number":1,"duration":10,"narration":"natural spoken narration","visual_description":"specific visual that matches this scene's narration","search_keywords":"2-4 concrete subject/action terms","search_queries":["2-3 short stock-search phrases, each 2-5 words, using distinct natural synonyms or visible details"],"text_overlay":"short phrase"}}]}}. Create exactly {scene_count} scenes in speaking order. Distribute the narration naturally across scenes and make their durations add up to about {duration} seconds. Search phrases must describe visible subjects, actions, and settings, avoid abstract ideas and duplicates, and must not invent details absent from the scene. Do not include markdown or text outside the JSON object.'''
         try:
-            max_tokens = min(8192, max(4096, int(duration) * 8))
-            return self._parse_json(self._chat(prompt, temperature=0.7, max_tokens=max_tokens, task="drafting the script and scene plan"))
-        except ValueError as exc:
-            raise RuntimeError(f"{self.provider_name} did not return a usable JSON script draft. Try a different text model.") from exc
+            data = self._parse_json(self._chat(
+                prompt,
+                temperature=0.7,
+                max_tokens=self._max_output_tokens(duration, scene_count),
+                task="generating the script and scene plan",
+            ))
+            script = self._normalize_script_output(data, title, duration, custom_script_reviewed=False)
+        except (ValueError, TypeError, KeyError, IndexError) as exc:
+            raise RuntimeError(
+                f"{self.provider_name} did not return a usable final script and scene plan "
+                f"({type(exc).__name__}: {exc}). Try again or choose another text model."
+            ) from exc
+        self.last_source = f"{self.provider_name} · {self.model} (single-pass)"
+        return script
+
+    @staticmethod
+    def _max_output_tokens(duration: int, scene_count: int) -> int:
+        """Set a duration-aware completion ceiling to avoid oversized requests across providers."""
+        target_words = max(10, round(max(1, int(duration)) * 2.25))
+        narration_budget = target_words * 3 // 2  # Approximate English word-to-token ratio.
+        scene_metadata_budget = max(1, int(scene_count)) * 70
+        return min(6000, max(2048, narration_budget + scene_metadata_budget + 500))
 
     def generate_custom_script(self, title: str, custom_text: str, duration: int) -> dict:
         """Use the selected hosted model to edit a custom draft and plan its scenes."""
@@ -149,11 +154,10 @@ RAW {source_label} data: {source}'''
             data = self._parse_json(self._chat(
                 prompt,
                 temperature=0.25,
-                max_tokens=min(8192, max(4096, int(duration) * 8)),
+                max_tokens=self._max_output_tokens(duration, scene_count),
                 task=f"reviewing the {source_label} and finalizing its script and scene plan",
             ))
-            reviewed = self._normalize_custom_review(data, title, duration)
-            return reviewed
+            return self._normalize_script_output(data, title, duration, custom_script_reviewed=True)
         except (ValueError, TypeError, KeyError, IndexError) as exc:
             raise RuntimeError(
                 f"{self.provider_name} could not produce a valid reviewed script from this {source_label} "
@@ -210,10 +214,10 @@ RAW {source_label} data: {source}'''
         return queries
 
     @staticmethod
-    def _normalize_custom_review(data, title, duration):
+    def _normalize_script_output(data, title, duration, *, custom_script_reviewed):
         raw_scenes = data.get("scenes")
         if not isinstance(raw_scenes, list) or not raw_scenes:
-            raise ValueError("The model returned no revised narration scenes.")
+            raise ValueError("The model returned no narration scenes.")
 
         scenes = []
         for item in raw_scenes:
@@ -259,8 +263,8 @@ RAW {source_label} data: {source}'''
         return {
             "title": str(title),
             "description": str(data.get("description") or f"A video about {title}.")[:5000],
-            "review_summary": str(data.get("review_summary") or "The selected hosted model reviewed and sequenced the supplied draft for this title.")[:1000],
-            "custom_script_reviewed": True,
+            "review_summary": str(data.get("review_summary") or "")[:1000] if custom_script_reviewed else "",
+            "custom_script_reviewed": bool(custom_script_reviewed),
             "tags": tags,
             "scenes": scenes,
         }
