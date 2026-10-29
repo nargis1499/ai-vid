@@ -199,6 +199,7 @@ def chat_completion(system_prompt: str, user_prompt: str, *, temperature: float,
             temperature=temperature,
             max_tokens=max_tokens,
             response_format={"type": "json_object"},
+            chat_template_kwargs={"enable_thinking": False},
         )
     try:
         choice = response["choices"][0]
