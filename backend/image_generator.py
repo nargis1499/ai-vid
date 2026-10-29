@@ -5,6 +5,7 @@ import requests
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont
 from common import DIRS
 from pixabay_client import PixabayClient
+from stock_search import image_quality_score, relevance_score, search_queries
 
 W,H=1280,720
 
@@ -29,41 +30,96 @@ class ImageGenerator:
     def generate_scene_image(self, scene:dict, index:int)->str:
         path=DIRS["images"]/f"scene_{index}.png"
         self.last_source=None
-        try:
-            if not self.api_key: raise RuntimeError("PEXELS_API_KEY not configured")
-            r=requests.get("https://api.pexels.com/v1/search",headers={"Authorization":self.api_key},params={"query":scene.get("search_keywords",scene.get("visual_description","nature")),"orientation":"landscape","per_page":10},timeout=20);r.raise_for_status()
-            photos=r.json().get("photos",[])
-            if not photos: raise RuntimeError("No Pexels results")
-            photo=random.choice(photos[:min(5,len(photos))]);url=photo["src"].get("large2x") or photo["src"].get("large")
-            raw=requests.get(url,timeout=30);raw.raise_for_status()
-            image=_cover(Image.open(io.BytesIO(raw.content))); image=ImageEnhance.Contrast(image).enhance(1.05)
-            image=self._overlay(image,scene.get("text_overlay","")); image.save(path)
-            self.last_source="Pexels"
-        except Exception as exc:
+        queries=search_queries(scene,max_queries=2)
+        candidates=self._search_pexels(queries)+self._search_pixabay(queries)
+        adequate=[item for item in candidates if item["width"]>=640 and item["height"]>=360]
+        if adequate:
+            candidates=adequate
+        candidates.sort(key=lambda item:(
+            -(item["relevance"]+(0.04 if item["provider"]=="Pexels" else 0.0)),
+            -item["quality"],0 if item["provider"]=="Pexels" else 1,
+            item["query_rank"],item["rank"],
+        ))
+        for selected in candidates:
             try:
-                self._save_pixabay_image(scene, path)
-                self.last_source="Pixabay"
-            except Exception as pixabay_exc:
-                print(f"[images] Pexels and Pixabay stock images unavailable; gradient fallback: {exc}; {pixabay_exc}")
-                self.last_source="Gradient"
-                self._gradient(scene.get("text_overlay") or scene.get("search_keywords") or "Explore",path)
+                response=requests.get(selected["url"],timeout=30);response.raise_for_status()
+                image=_cover(Image.open(io.BytesIO(response.content)))
+                image=ImageEnhance.Contrast(image).enhance(1.05)
+                image=self._overlay(image,scene.get("text_overlay",""));image.save(path)
+                self.last_source=selected["provider"]
+                return str(path)
+            except Exception as exc:
+                print(f"[images] Could not download a ranked {selected['provider']} still: {exc}")
+        self.last_source="Gradient"
+        self._gradient(scene.get("text_overlay") or scene.get("search_keywords") or "Explore",path)
         return str(path)
 
-    def _save_pixabay_image(self, scene, path):
-        query=scene.get("search_keywords",scene.get("visual_description","nature"))
-        hits=self.pixabay.search_images(query,per_page=20)
-        if not hits:
-            raise RuntimeError("No Pixabay image results")
-        photo=hits[0]
-        url=photo.get("largeImageURL") or photo.get("webformatURL")
-        if not url:
-            raise RuntimeError("Pixabay result has no downloadable image")
-        response=requests.get(url,timeout=30)
-        response.raise_for_status()
-        image=_cover(Image.open(io.BytesIO(response.content)))
-        image=ImageEnhance.Contrast(image).enhance(1.05)
-        image=self._overlay(image,scene.get("text_overlay",""))
-        image.save(path)
+    def _search_pexels(self, queries):
+        if not self.api_key:
+            return []
+        candidates=[];seen=set()
+        for query_rank,query in enumerate(queries):
+            try:
+                response=requests.get(
+                    "https://api.pexels.com/v1/search",
+                    headers={"Authorization":self.api_key},
+                    params={"query":query,"orientation":"landscape","per_page":20},timeout=20,
+                );response.raise_for_status()
+                payload=response.json();photos=payload.get("photos",[]) if isinstance(payload,dict) else []
+            except Exception as exc:
+                print(f"[images] Pexels search failed for a scene query: {exc}")
+                continue
+            for rank,photo in enumerate(photos):
+                if not isinstance(photo,dict):
+                    continue
+                width,height=photo.get("width",0),photo.get("height",0)
+                try:width,height=int(width or 0),int(height or 0)
+                except (TypeError,ValueError):width,height=0,0
+                if width and height and width/height<1.15:
+                    continue
+                source=photo.get("src") if isinstance(photo.get("src"),dict) else {}
+                url=source.get("large2x") or source.get("large") or source.get("medium")
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                metadata=" ".join((str(photo.get("alt") or ""),str(photo.get("url") or ""),str(photo.get("photographer") or "")))
+                candidates.append({
+                    "provider":"Pexels","url":url,"metadata":metadata,"width":width,"height":height,
+                    "quality":image_quality_score(width,height),"relevance":relevance_score(queries,metadata),
+                    "query_rank":query_rank,"rank":rank,
+                })
+        return candidates
+
+    def _search_pixabay(self, queries):
+        if not self.pixabay.api_key:
+            return []
+        candidates=[];seen=set()
+        for query_rank,query in enumerate(queries):
+            try:
+                hits=self.pixabay.search_images(query,per_page=25)
+            except Exception as exc:
+                print(f"[images] Pixabay search failed for a scene query: {exc}")
+                continue
+            for rank,photo in enumerate(hits):
+                if not isinstance(photo,dict):
+                    continue
+                width,height=photo.get("imageWidth",0),photo.get("imageHeight",0)
+                try:width,height=int(width or 0),int(height or 0)
+                except (TypeError,ValueError):width,height=0,0
+                if width and height and width/height<1.15:
+                    continue
+                url=photo.get("largeImageURL") or photo.get("webformatURL")
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                metadata=" ".join((str(photo.get("tags") or ""),str(photo.get("type") or ""),str(photo.get("user") or "")))
+                candidates.append({
+                    "provider":"Pixabay","url":url,"metadata":metadata,"width":width,"height":height,
+                    "quality":image_quality_score(width,height),"relevance":relevance_score(queries,metadata),
+                    "query_rank":query_rank,"rank":rank,
+                })
+        return candidates
+
     def process_uploaded(self,path:str,scene:dict,index:int)->str:
         out=DIRS["images"]/f"scene_{index}.png";image=_cover(Image.open(path));image=ImageEnhance.Contrast(image).enhance(1.1);image=ImageEnhance.Color(image).enhance(1.15)
         image=self._overlay(image,scene.get("text_overlay",""),dark=True);image.save(out);return str(out)

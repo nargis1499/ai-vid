@@ -281,14 +281,12 @@ class BatchOrchestrator:
                 continue
             if media[i] and media[i].get("path") and os.path.isfile(media[i]["path"]):
                 continue
-            search_query=(scene.get("search_keywords") or scene.get("visual_description")
-                          or scene.get("narration") or title)
             if thumbnail_only:
                 stock_clip=None
                 report(pct,"images",f"Finding a thumbnail-ready still for scene {i+1} of {len(scenes)}…")
             elif self.fetcher.api_key or self.fetcher.pixabay.api_key:
                 report(pct,"images",f"Searching Pexels and Pixabay for scene {i+1}; choosing the closest available stock clip…")
-                stock_clip=self.fetcher.fetch_clip(search_query,serial*100+i,min_dur=5)
+                stock_clip=self.fetcher.fetch_clip(scene,serial*100+i,min_dur=5)
             else:
                 stock_clip=None
                 report(pct,"images",f"No stock API key configured; preparing a fallback visual for scene {i+1} of {len(scenes)}…")
