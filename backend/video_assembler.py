@@ -79,7 +79,7 @@ class VideoAssembler:
             raise RuntimeError(f"Pillow could not be loaded ({type(exc).__name__}: {exc}). Reinstall the app's media dependencies.") from exc
         try:
             from moviepy.editor import (AudioFileClip, ImageClip, VideoClip, VideoFileClip,
-                                        concatenate_videoclips, CompositeVideoClip)
+                                        concatenate_audioclips, concatenate_videoclips, CompositeVideoClip)
             from moviepy.audio.AudioClip import CompositeAudioClip
             from moviepy.audio.fx.all import audio_fadein, audio_fadeout, audio_loop
             from moviepy.config import FFMPEG_BINARY
@@ -121,7 +121,6 @@ class VideoAssembler:
         audios = []
         subtitle_clips = []
         music_clip = music_loop = mixed_audio = voice_track = None
-        voice_parts = []
         final = None
         try:
             speech_durations = []
@@ -147,8 +146,8 @@ class VideoAssembler:
                 speech_durations.append(speech_duration)
                 scene_durations.append(duration)
                 scene_starts.append(scene_cursor)
-                voice_parts.append(audio.subclip(0, min(duration, speech_duration)).set_start(scene_cursor))
-                scene_cursor += duration - self.TRANSITION_DURATION
+                # Keep narration timing independent of the visual-only overlap between scenes.
+                scene_cursor += speech_duration
                 if item.get("type") == "video":
                     clip = VideoFileClip(item["path"], audio=False)
                     if clip.duration < duration:
@@ -188,7 +187,9 @@ class VideoAssembler:
             final = concatenate_videoclips(
                 clips, method="compose", padding=-self.TRANSITION_DURATION
             )
-            voice_track = CompositeAudioClip(voice_parts).set_duration(final.duration)
+            # Concatenate source narration files in scene order as one uninterrupted track.
+            # The negative video padding/transition masks must never trim or blend voice audio.
+            voice_track = concatenate_audioclips(audios).set_duration(final.duration)
             title = video_title or script.get("title") or "Video"
 
             # Captions use the exact revised narration and follow each scene's transition-aware start time.
@@ -255,7 +256,7 @@ class VideoAssembler:
                     clip.close()
                 except Exception:
                     pass
-            for audio in voice_parts + audios:
+            for audio in audios:
                 try:
                     audio.close()
                 except Exception:
