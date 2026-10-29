@@ -1,6 +1,6 @@
 # CreatorFlow — YouTube Video Automation
 
-CreatorFlow is a web app that turns video-title lists into narrated, edited videos with thumbnails and YouTube metadata. Scripts, scene plans, SEO metadata, and thumbnail copy use the **same selected hosted text provider and model**: OpenRouter or Grok (xAI). The app does not load or run local AI models.
+CreatorFlow is a web app that turns video-title lists into narrated, edited videos with thumbnails and YouTube metadata. Scripts, scene plans, SEO metadata, and thumbnail copy use the **same selected hosted text provider and model**: OpenRouter or Groq (GroqCloud). The app does not load or run local AI models.
 
 ![CreatorFlow studio UI preview](screenshots/creator-studio-preview.png)
 
@@ -19,7 +19,7 @@ Open the URL printed by Flask (normally `http://localhost:5000`). Generated vide
 
 Open **Settings** in the web app:
 
-- **Text AI provider:** choose **OpenRouter** or **Grok (xAI)** in Settings, select a model, and enter that provider's API key. OpenRouter's visible catalog contains free text-generation models only; Grok's catalog loads from xAI after its API key is saved. Grok model usage may incur xAI charges. The selected provider/model handles regular and custom scripts, scene plans, SEO metadata, and thumbnail copy. Prompts and custom drafts are sent to the selected provider; API keys are stored in per-user settings and are not returned to the browser. If the provider is unavailable or returns incomplete output, generation fails rather than silently switching to a fallback.
+- **Text AI provider:** choose **OpenRouter** or **Groq (GroqCloud)** in Settings, select a model, and enter that provider's API key. OpenRouter's visible catalog contains free text-generation models only; Groq's catalog loads from GroqCloud after its API key is saved. Groq model availability and rate limits depend on your GroqCloud account. The selected provider/model handles regular and custom scripts, scene plans, SEO metadata, and thumbnail copy. Prompts and custom drafts are sent to the selected provider; API keys are stored in per-user settings and are not returned to the browser. If the provider is unavailable or returns incomplete output, generation fails rather than silently switching to a fallback.
 - **Stock visuals:** CreatorFlow prefers the closest Pexels or Pixabay clip, then a stock still. If neither is available, it creates a designed gradient fallback; it does not download or run an image-generation model. Add stock API keys in Settings. Search results are cached locally and selected media is downloaded rather than hotlinked.
 - **Narration:** voiceovers use Microsoft's hosted Edge TTS service and require an internet connection. Choose a voice and pace in the video brief. If hosted narration fails, generation stops with an error—there is no Chatterbox or offline system-voice fallback.
 - **Music and rendering:** background music is created procedurally (not with an AI model). Video assembly and captions run on the app host; MP4 encoding always uses CPU-based H.264 libx264, with no GPU encoder path.
@@ -30,7 +30,7 @@ Settings and API keys are stored per-user under `%APPDATA%\CreatorFlow\settings.
 
 ## No local AI models
 
-CreatorFlow no longer depends on Ollama, SDXL/Diffusers, Chatterbox, or an offline TTS model. You do not need to install or download model weights. OpenRouter or Grok handles text-generation tasks; visuals come from licensed stock or a designed fallback, and narration uses hosted Edge TTS. Ordinary video editing and encoding still run locally on the app host.
+CreatorFlow no longer depends on Ollama, SDXL/Diffusers, Chatterbox, or an offline TTS model. You do not need to install or download model weights. OpenRouter or Groq handles text-generation tasks; visuals come from licensed stock or a designed fallback, and narration uses hosted Edge TTS. Ordinary video editing and encoding still run locally on the app host.
 
 ## YouTube OAuth setup
 
@@ -42,14 +42,14 @@ CreatorFlow no longer depends on Ollama, SDXL/Diffusers, Chatterbox, or an offli
 ## Requirements
 
 - Python 3.11 and FFmpeg for running from source.
-- An OpenRouter or xAI API key and a selected model for the chosen text provider.
+- An OpenRouter or GroqCloud API key and a selected model for the chosen text provider.
 - Internet access for the selected text provider, hosted Edge TTS, and stock-media providers.
 - Pexels and/or Pixabay API keys for stock photos and clips (optional).
 - Google OAuth JSON for YouTube uploads (optional).
 
 ## Troubleshooting
 
-- **Text model list does not load:** check the app host's internet connection and the selected provider's model-catalog access. OpenRouter lists free text models; Grok discovery requires a valid xAI API key.
+- **Text model list does not load:** check the app host's internet connection and the selected provider's model-catalog access. OpenRouter lists free text models; Groq discovery requires a valid GroqCloud API key.
 - **Script generation fails:** check that the selected provider, model, and matching API key are set in Settings, and that the provider account has sufficient quota.
 - **No voiceover:** Edge TTS is hosted and requires internet access. Check the selected voice and retry; the app will not use a local voice model.
 - **No stock visuals:** add a valid Pexels or Pixabay key in Settings; a designed gradient fallback is used when stock is unavailable.

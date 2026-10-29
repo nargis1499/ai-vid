@@ -24,8 +24,8 @@ app.config["MAX_CONTENT_LENGTH"]=100*1024*1024
 orchestrator=BatchOrchestrator()
 FRONTEND=ROOT_DIR/"frontend"
 _OPENROUTER_MODELS_CACHE={"loaded_at":0.0,"models":[]}
-_GROK_MODELS_CACHE={"loaded_at":0.0,"key_digest":"","models":[]}
-_GROK_FALLBACK_MODELS=("grok-4-fast","grok-4","grok-3-mini","grok-3")
+_GROQ_MODELS_CACHE={"loaded_at":0.0,"key_digest":"","models":[]}
+_GROQ_FALLBACK_MODELS=("openai/gpt-oss-120b","openai/gpt-oss-20b","llama-3.3-70b-versatile")
 
 def _openrouter_models(refresh=False):
     """Return only free, text-output models available through OpenRouter."""
@@ -75,37 +75,38 @@ def _openrouter_models(refresh=False):
     cached.update(loaded_at=now,models=models)
     return models
 
-def _grok_models(refresh=False):
-    """Load text models from xAI when a Grok key is saved; offer safe defaults before that."""
-    api_key=load_settings().get("GROK_API_KEY","").strip()
-    fallback=[{"id":model,"name":model,"free":False} for model in _GROK_FALLBACK_MODELS]
+def _groq_models(refresh=False):
+    """Load text models from GroqCloud when a Groq key is saved; offer safe defaults before that."""
+    api_key=load_settings().get("GROQ_API_KEY","").strip()
+    fallback=[{"id":model,"name":model,"free":False} for model in _GROQ_FALLBACK_MODELS]
     if not api_key:
-        return fallback,"Save your xAI API key to load the current Grok model catalog. Grok usage may be billed by xAI."
+        return fallback,"Save your GroqCloud API key to load the current model catalog. Available models and rate limits depend on your GroqCloud account."
     import hashlib
     key_digest=hashlib.sha256(api_key.encode("utf-8")).hexdigest()
-    cached=_GROK_MODELS_CACHE
+    cached=_GROQ_MODELS_CACHE
     now=time.time()
     if not refresh and cached["models"] and cached["key_digest"]==key_digest and now-cached["loaded_at"]<600:
         return cached["models"],None
     response=requests.get(
-        "https://api.x.ai/v1/models",
+        "https://api.groq.com/openai/v1/models",
         headers={"Authorization":f"Bearer {api_key}","Accept":"application/json"},
         timeout=20,
     )
     response.raise_for_status()
     payload=response.json()
     if not isinstance(payload,dict) or not isinstance(payload.get("data"),list):
-        raise ValueError("xAI returned an invalid model catalog response.")
+        raise ValueError("GroqCloud returned an invalid model catalog response.")
     models=[]
     for item in payload["data"]:
         if not isinstance(item,dict):
             continue
         model_id=str(item.get("id") or "").strip()
-        if not model_id or "grok" not in model_id.lower() or any(term in model_id.lower() for term in ("embedding","image","vision")):
+        excluded_terms=("embedding","image","vision","whisper","orpheus","tts","speech","audio","guard","moderation")
+        if not model_id or any(term in model_id.lower() for term in excluded_terms):
             continue
-        models.append({"id":model_id,"name":str(item.get("name") or model_id),"free":False})
+        models.append({"id":model_id,"name":str(item.get("name") or model_id),"context_length":item.get("context_window") or item.get("context_length"),"free":False})
     if not models:
-        raise ValueError("xAI returned no Grok text-generation models.")
+        raise ValueError("GroqCloud returned no Groq text-generation models.")
     models.sort(key=lambda item:(item["name"].lower(),item["id"].lower()))
     cached.update(loaded_at=now,key_digest=key_digest,models=models)
     return models,None
@@ -121,9 +122,9 @@ def _apply_runtime_settings(settings):
     provider=str(settings.get("TEXT_PROVIDER") or "openrouter").lower()
     model=str(settings.get("TEXT_MODEL") or settings.get("OPENROUTER_MODEL") or "").strip()
     openrouter_key=os.getenv("OPENROUTER_API_KEY", "").strip()
-    grok_key=os.getenv("GROK_API_KEY", "").strip()
-    orchestrator.scripts.configure(provider,model,openrouter_key,grok_key)
-    orchestrator.seo.configure(provider,model,openrouter_key,grok_key)
+    groq_key=os.getenv("GROQ_API_KEY", "").strip()
+    orchestrator.scripts.configure(provider,model,openrouter_key,groq_key)
+    orchestrator.seo.configure(provider,model,openrouter_key,groq_key)
     orchestrator.images.api_key=os.getenv("PEXELS_API_KEY", "").strip()
     orchestrator.images.pixabay.set_api_key(os.getenv("PIXABAY_API_KEY", "").strip())
     orchestrator.fetcher.api_key=orchestrator.images.api_key
@@ -145,8 +146,8 @@ def create_batch():
     titles=[str(t).strip()[:200] for t in titles if str(t).strip()]
     if not titles:return jsonify({"error":"Enter at least one video title."}),400
     provider=str(os.getenv("TEXT_PROVIDER","openrouter")).strip().lower()
-    provider_name="Grok (xAI)" if provider=="grok" else "OpenRouter"
-    api_key=os.getenv("GROK_API_KEY","").strip() if provider=="grok" else os.getenv("OPENROUTER_API_KEY","").strip()
+    provider_name="Groq (GroqCloud)" if provider=="groq" else "OpenRouter"
+    api_key=os.getenv("GROQ_API_KEY","").strip() if provider=="groq" else os.getenv("OPENROUTER_API_KEY","").strip()
     if not api_key:return jsonify({"error":f"Add your {provider_name} API key in Settings before generating videos."}),400
     if not os.getenv("TEXT_MODEL","").strip():return jsonify({"error":f"Choose a {provider_name} text model in Settings before generating videos."}),400
     if len(titles)>30:return jsonify({"error":"A batch can contain at most 30 titles."}),400
@@ -230,19 +231,21 @@ def get_thumbnail(batch_id,index):
 @app.get("/api/text/models")
 def text_models():
     provider=str(request.args.get("provider","openrouter")).strip().lower()
+    if provider=="grok":
+        provider="groq"
     if provider=="openrouter":
         try:
             return jsonify({"models":_openrouter_models(request.args.get("refresh")=="1"),"provider":provider,"free_only":True})
         except (requests.RequestException,ValueError,TypeError) as exc:
             return jsonify({"error":f"Could not load free OpenRouter text models: {exc}"}),502
-    if provider=="grok":
+    if provider=="groq":
         try:
-            models,notice=_grok_models(request.args.get("refresh")=="1")
+            models,notice=_groq_models(request.args.get("refresh")=="1")
             return jsonify({"models":models,"provider":provider,"free_only":False,"notice":notice})
         except (requests.RequestException,ValueError,TypeError) as exc:
-            fallback=[{"id":model,"name":model,"free":False} for model in _GROK_FALLBACK_MODELS]
-            return jsonify({"models":fallback,"provider":provider,"free_only":False,"notice":f"The live xAI catalog could not be loaded ({exc}); showing fallback model choices. Check your xAI key and connection."})
-    return jsonify({"error":"Choose OpenRouter or Grok as the text provider."}),400
+            fallback=[{"id":model,"name":model,"free":False} for model in _GROQ_FALLBACK_MODELS]
+            return jsonify({"models":fallback,"provider":provider,"free_only":False,"notice":f"The live GroqCloud catalog could not be loaded ({exc}); showing fallback model choices. Check your GroqCloud key and connection."})
+    return jsonify({"error":"Choose OpenRouter or Groq as the text provider."}),400
 
 @app.get("/api/settings")
 def get_settings():
@@ -251,7 +254,7 @@ def get_settings():
 @app.post("/api/settings")
 def update_settings():
     body=request.get_json(silent=True) or {}
-    allowed=set(public_settings())-{"PEXELS_API_KEY_CONFIGURED", "PIXABAY_API_KEY_CONFIGURED", "OPENROUTER_API_KEY_CONFIGURED", "GROK_API_KEY_CONFIGURED", "YOUTUBE_CREDENTIALS_CONFIGURED"}
+    allowed=set(public_settings())-{"PEXELS_API_KEY_CONFIGURED", "PIXABAY_API_KEY_CONFIGURED", "OPENROUTER_API_KEY_CONFIGURED", "GROQ_API_KEY_CONFIGURED", "YOUTUBE_CREDENTIALS_CONFIGURED"}
     updates={key:value for key,value in body.items() if key in allowed}
     if body.get("PEXELS_API_KEY"):
         updates["PEXELS_API_KEY"]=str(body["PEXELS_API_KEY"]).strip()
@@ -265,10 +268,10 @@ def update_settings():
         updates["OPENROUTER_API_KEY"]=str(body["OPENROUTER_API_KEY"]).strip()
     elif body.get("CLEAR_OPENROUTER_API_KEY"):
         updates["OPENROUTER_API_KEY"]=""
-    if body.get("GROK_API_KEY"):
-        updates["GROK_API_KEY"]=str(body["GROK_API_KEY"]).strip()
-    elif body.get("CLEAR_GROK_API_KEY"):
-        updates["GROK_API_KEY"]=""
+    if body.get("GROQ_API_KEY"):
+        updates["GROQ_API_KEY"]=str(body["GROQ_API_KEY"]).strip()
+    elif body.get("CLEAR_GROQ_API_KEY"):
+        updates["GROQ_API_KEY"]=""
     try:
         settings=save_settings(updates)
         _apply_runtime_settings(settings)
