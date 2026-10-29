@@ -27,6 +27,21 @@ _llm = None
 _llm_path = None
 
 
+def _disable_template_thinking(llm) -> None:
+    """Pass Qwen's thinking toggle to llama-cpp-python's Jinja chat handler."""
+    handler = llm.chat_handler or llm._chat_handlers.get(llm.chat_format)
+    if handler is None:
+        return
+
+    def no_thinking_handler(**kwargs):
+        kwargs["enable_thinking"] = False
+        return handler(**kwargs)
+
+    # llama-cpp-python 0.3.36 accepts template variables through the handler,
+    # but not as create_chat_completion keyword arguments.
+    llm.chat_handler = no_thinking_handler
+
+
 def model_path() -> Path:
     configured = str(load_settings().get("LOCAL_QWEN_MODEL_PATH") or "").strip()
     return Path(configured).expanduser() if configured else DEFAULT_MODEL_PATH
@@ -190,6 +205,7 @@ def chat_completion(system_prompt: str, user_prompt: str, *, temperature: float,
                 n_gpu_layers=0,
                 verbose=False,
             )
+            _disable_template_thinking(_llm)
             _llm_path = str(path.resolve())
         response = _llm.create_chat_completion(
             messages=[
@@ -199,7 +215,6 @@ def chat_completion(system_prompt: str, user_prompt: str, *, temperature: float,
             temperature=temperature,
             max_tokens=max_tokens,
             response_format={"type": "json_object"},
-            chat_template_kwargs={"enable_thinking": False},
         )
     try:
         choice = response["choices"][0]
