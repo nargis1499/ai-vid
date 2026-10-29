@@ -329,11 +329,11 @@ class BatchOrchestrator:
                     if media[i] and media[i]["type"]=="video":
                         report(pct,"clips",f"Using the selected stock footage for scene {i+1} of {len(scenes)}…")
                     else:
-                        report(pct,"clips",f"Using the still fallback for scene {i+1} of {len(scenes)} with standard transitions…")
+                        report(pct,"clips",f"Using the still fallback for scene {i+1} of {len(scenes)} with a randomized scene transition…")
                     report(28+int(17*(i+1)/max(1,len(scenes))),"clips",f"Scene {i+1} footage and transitions ready")
                 steps["clips"]="done" if any(m and m["type"]=="video" for m in media) else "fallback"
                 stock_count=sum(1 for item in media if item and item["type"]=="video")
-                clip_summary=f"Stock footage ready for {stock_count} scene(s)" if stock_count else "Using still fallbacks with standard transitions"
+                clip_summary=f"Stock footage ready for {stock_count} scene(s)" if stock_count else "Using still fallbacks with randomized transitions"
             report(45,"clips",clip_summary,{"clips":steps["clips"]})
         if thumbnail_only and retry_from:
             skipped_updates={key:"skipped" for key in ("audio","assembly","subtitles","music","encoding","upload")}
