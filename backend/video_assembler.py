@@ -9,6 +9,8 @@ from common import DIRS, ROOT_DIR
 
 class VideoAssembler:
     TRANSITION_DURATION = 0.5
+    # Keep speech crossfades short so they smooth joins without layering full words.
+    AUDIO_CROSSFADE_DURATION = 0.05
     # Randomly choose among the retained and newly added transitions at each scene boundary.
     TRANSITION_STYLES = (
         "panel-slice", "shattered-glass", "swish-pan", "light-leak",
@@ -109,9 +111,9 @@ class VideoAssembler:
             raise RuntimeError(f"Pillow could not be loaded ({type(exc).__name__}: {exc}). Reinstall the app's media dependencies.") from exc
         try:
             from moviepy.editor import (AudioFileClip, ImageClip, VideoClip, VideoFileClip,
-                                        concatenate_audioclips, concatenate_videoclips, CompositeVideoClip)
+                                        concatenate_videoclips, CompositeVideoClip)
             from moviepy.audio.AudioClip import CompositeAudioClip
-            from moviepy.audio.fx.all import audio_fadein, audio_loop
+            from moviepy.audio.fx.all import audio_fadein, audio_fadeout, audio_loop
             from moviepy.config import FFMPEG_BINARY
         except Exception as exc:
             details = str(exc)
@@ -150,6 +152,8 @@ class VideoAssembler:
         clips = []
         audios = []
         voice_parts = []
+        positioned_voice_parts = []
+        voice_crossfades = []
         subtitle_clips = []
         music_clip = music_loop = mixed_audio = voice_track = None
         final = None
@@ -177,12 +181,20 @@ class VideoAssembler:
                 )
                 voice_parts.append(voice_part)
                 speech_duration = max(0.1, float(voice_part.duration or 0.1))
-                duration = max(2.0, speech_duration + 0.5)
+                has_next_scene = i < len(media_items) - 1
+                crossfade = min(
+                    self.AUDIO_CROSSFADE_DURATION,
+                    self.TRANSITION_DURATION,
+                    speech_duration * 0.25,
+                ) if has_next_scene else 0.0
+                voice_crossfades.append(crossfade)
+                # Video overlaps the next scene by the visual transition duration; audio
+                # overlaps only briefly, keeping words intelligible and starts synchronized.
+                duration = speech_duration - crossfade + self.TRANSITION_DURATION if has_next_scene else speech_duration + self.TRANSITION_DURATION
                 speech_durations.append(speech_duration)
                 scene_durations.append(duration)
                 scene_starts.append(scene_cursor)
-                # Keep narration timing independent of the visual-only overlap between scenes.
-                scene_cursor += speech_duration
+                scene_cursor += speech_duration - crossfade
                 if item.get("type") == "video":
                     clip = VideoFileClip(item["path"], audio=False)
                     if clip.duration < duration:
@@ -222,9 +234,17 @@ class VideoAssembler:
             final = concatenate_videoclips(
                 clips, method="compose", padding=-self.TRANSITION_DURATION
             )
-            # Join voice segments after removing excess per-file TTS silence at scene edges.
-            # Video padding and transition masks must never trim or blend the narration.
-            voice_track = concatenate_audioclips(voice_parts).set_duration(final.duration)
+            # Apply a short audio crossfade at each narration join. The matching scene starts
+            # use the same overlap so video, voiceover, and captions stay on one timeline.
+            for index, voice_part in enumerate(voice_parts):
+                incoming_fade = voice_crossfades[index - 1] if index > 0 else 0.0
+                outgoing_fade = voice_crossfades[index] if index < len(voice_parts) - 1 else 0.0
+                if incoming_fade > 0:
+                    voice_part = audio_fadein(voice_part, incoming_fade)
+                if outgoing_fade > 0:
+                    voice_part = audio_fadeout(voice_part, outgoing_fade)
+                positioned_voice_parts.append(voice_part.set_start(scene_starts[index]))
+            voice_track = CompositeAudioClip(positioned_voice_parts).set_duration(final.duration)
             title = video_title or script.get("title") or "Video"
 
             # Captions use the exact revised narration and follow each scene's transition-aware start time.
@@ -292,7 +312,7 @@ class VideoAssembler:
                 except Exception:
                     pass
             closed_audio_ids = set()
-            for audio in voice_parts + audios:
+            for audio in voice_parts + positioned_voice_parts + audios:
                 if id(audio) in closed_audio_ids:
                     continue
                 closed_audio_ids.add(id(audio))
@@ -328,9 +348,9 @@ class VideoAssembler:
         if not len(active):
             return audio
 
-        # Keep each complete 10 ms speech frame and remove only the silent frames around it.
-        start = float(active[0]) * 0.01
-        end = min(duration, float(active[-1] + 1) * 0.01) if trim_end else duration
+        # Retain a small handle around active speech so crossfades never shave consonants.
+        start = max(0.0, float(active[0]) * 0.01 - 0.02)
+        end = min(duration, float(active[-1] + 1) * 0.01 + 0.03) if trim_end else duration
         if end - start < 0.08 or duration - (end - start) < 0.015:
             return audio
         return audio.subclip(start, end)
