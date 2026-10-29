@@ -48,18 +48,23 @@ class ScriptGenerator:
             headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
             if self.provider == "openrouter":
                 headers["X-Title"] = "CreatorFlow"
+            request_body = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": "You write accurate, useful video narration and scene plans. Follow the requested structure and return valid JSON only."},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+            # Groq's GPT-OSS models can spend a large part of a small completion budget
+            # on internal reasoning. Keep that budget low so the requested JSON can finish.
+            if self.provider == "groq" and "gpt-oss" in self.model.lower():
+                request_body["reasoning_effort"] = "low"
             response = requests.post(
                 self.PROVIDER_URLS[self.provider],
                 headers=headers,
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": "You write accurate, useful video narration and scene plans. Follow the requested structure and return valid JSON only."},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                },
+                json=request_body,
                 timeout=180,
             )
         except requests.RequestException as exc:
@@ -77,7 +82,13 @@ class ScriptGenerator:
             )
         try:
             payload = response.json()
-            content = payload["choices"][0]["message"]["content"]
+            choice = payload["choices"][0]
+            if str(choice.get("finish_reason") or "").lower() == "length":
+                raise RuntimeError(
+                    f"{self.provider_name} reached the {max_tokens}-token output ceiling while {task}; "
+                    "the response may be incomplete. Try a shorter video duration or another model."
+                )
+            content = choice["message"]["content"]
             if isinstance(content, list):
                 content = "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
             if not str(content or "").strip():
@@ -91,7 +102,7 @@ class ScriptGenerator:
         duration = max(1, int(duration))
         scene_count = max(1, min(24, duration // 10))
         target_words = max(10, round(duration * 2.25))
-        prompt = f'''Create the FINAL, production-ready YouTube narration and scene plan for this title: {title!r}. Target total narration duration: {duration} seconds, about {target_words} spoken words at a natural pace. Write a compelling hook, a coherent progression with natural transitions, and a satisfying ending. Be accurate, useful, and engaging; do not invent facts, statistics, examples, or citations. Narration must be TTS-ready spoken words only, with no headings, stage directions, or visual instructions. Return ONLY valid JSON with this exact structure: {{"title":"...","description":"short video summary","tags":["tag"],"scenes":[{{"scene_number":1,"duration":10,"narration":"natural spoken narration","visual_description":"specific visual that matches this scene's narration","search_keywords":"2-4 concrete subject/action terms","search_queries":["2-3 short stock-search phrases, each 2-5 words, using distinct natural synonyms or visible details"],"text_overlay":"short phrase"}}]}}. Create exactly {scene_count} scenes in speaking order. Distribute the narration naturally across scenes and make their durations add up to about {duration} seconds. Search phrases must describe visible subjects, actions, and settings, avoid abstract ideas and duplicates, and must not invent details absent from the scene. Do not include markdown or text outside the JSON object.'''
+        prompt = f'''Create the FINAL, production-ready YouTube narration and scene plan for this title: {title!r}. Target total narration duration: {duration} seconds, about {target_words} spoken words at a natural pace. Write a compelling hook, a coherent progression with natural transitions, and a satisfying ending. Be accurate, useful, and engaging; do not invent facts, statistics, examples, or citations. Narration must be TTS-ready spoken words only, with no headings, stage directions, or visual instructions. Return ONLY valid JSON with this exact structure: {{"title":"...","description":"short video summary","tags":["tag"],"scenes":[{{"scene_number":1,"duration":10,"narration":"natural spoken narration","visual_description":"specific visual that matches this scene's narration","search_keywords":"2-4 concrete subject/action terms","search_queries":["two distinct stock-search phrases, each 2-5 words"],"text_overlay":"short phrase"}}]}}. Create exactly {scene_count} scenes in speaking order. Distribute the narration naturally across scenes and make their durations add up to about {duration} seconds. Keep metadata concise: use a description of at most 2 sentences, visual descriptions of at most 14 words, exactly 2 stock-search phrases per scene (2-5 words each), text overlays of at most 6 words, and 8-12 tags. Search phrases must describe visible subjects, actions, and settings, avoid abstract ideas and duplicates, and must not invent details absent from the scene. Do not include markdown or text outside the JSON object.'''
         try:
             data = self._parse_json(self._chat(
                 prompt,
@@ -108,13 +119,13 @@ class ScriptGenerator:
         self.last_source = f"{self.provider_name} · {self.model} (single-pass)"
         return script
 
-    @staticmethod
-    def _max_output_tokens(duration: int, scene_count: int) -> int:
-        """Set a duration-aware completion ceiling to avoid oversized requests across providers."""
+    def _max_output_tokens(self, duration: int, scene_count: int) -> int:
+        """Set a duration-aware completion ceiling, with room for reasoning-model overhead."""
         target_words = max(10, round(max(1, int(duration)) * 2.25))
         narration_budget = target_words * 3 // 2  # Approximate English word-to-token ratio.
         scene_metadata_budget = max(1, int(scene_count)) * 70
-        return min(6000, max(2048, narration_budget + scene_metadata_budget + 500))
+        minimum = 4096 if self.provider == "groq" and "gpt-oss" in self.model.lower() else 2048
+        return min(6000, max(minimum, narration_budget + scene_metadata_budget + 500))
 
     def generate_custom_script(self, title: str, custom_text: str, duration: int) -> dict:
         """Use the selected hosted model to edit a custom draft and plan its scenes."""
