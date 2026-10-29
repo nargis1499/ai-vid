@@ -299,7 +299,7 @@ class BatchOrchestrator:
                 report(8+int(20*(i+1)/max(1,len(scenes))),"images",f"Selected the closest available {provider} stock clip for scene {i+1} of {len(scenes)}")
                 continue
 
-            if not thumbnail_only:report(pct,"images",f"No usable stock clip found; searching Pexels and Pixabay for a stock still for scene {i+1}…")
+            if not thumbnail_only:report(pct,"images",f"No sufficiently relevant stock clip matched scene {i+1}; looking for a matching stock still…")
             image_path=self.images.generate_scene_image(scene,serial*100+i)
             self._check_cancel(batch_id)
             media[i]={"type":"image","path":image_path}

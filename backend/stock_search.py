@@ -2,12 +2,16 @@
 import re
 
 
+MIN_STOCK_RELEVANCE = 0.40
+
+
 _STOP_WORDS = {
     "a", "about", "after", "all", "an", "and", "are", "at", "be", "beautiful",
     "by", "cinematic", "clip", "close", "day", "for", "from", "high", "in", "into",
     "is", "it", "landscape", "look", "of", "on", "or", "people", "photo", "scene",
     "shot", "the", "their", "this", "to", "up", "video", "view", "with", "quality",
     "footage", "wide", "camera", "background", "image", "stock", "visual", "showing",
+    "com", "http", "https", "pexels", "pixabay", "www",
 }
 
 
@@ -60,10 +64,10 @@ def relevance_score(queries, metadata):
         metadata_text = " ".join(str(value or "") for value in metadata)
     else:
         metadata_text = str(metadata or "")
-    metadata_text = re.sub(r"[^\w'-]+", " ", metadata_text.casefold())
+    metadata_text = re.sub(r"[^\w']+", " ", metadata_text.casefold())
     metadata_terms = {
-        token for token in re.findall(r"[\w'-]+", metadata_text)
-        if len(token) > 2 and token not in _STOP_WORDS
+        token for token in re.findall(r"[\w']+", metadata_text)
+        if len(token) > 2 and not token.isdigit() and token not in _STOP_WORDS
     }
     if not metadata_terms:
         return 0.0
@@ -71,10 +75,10 @@ def relevance_score(queries, metadata):
     normalized_metadata = f" {metadata_text} "
     best = 0.0
     for query in queries:
-        query_text = re.sub(r"[^\w'-]+", " ", str(query or "").casefold()).strip()
+        query_text = re.sub(r"[^\w']+", " ", str(query or "").casefold()).strip()
         query_terms = {
-            token for token in re.findall(r"[\w'-]+", query_text)
-            if len(token) > 2 and token not in _STOP_WORDS
+            token for token in re.findall(r"[\w']+", query_text)
+            if len(token) > 2 and not token.isdigit() and token not in _STOP_WORDS
         }
         if not query_terms:
             continue

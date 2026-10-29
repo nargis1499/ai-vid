@@ -7,7 +7,7 @@ import requests
 
 from common import DIRS
 from pixabay_client import PixabayClient
-from stock_search import relevance_score, search_queries
+from stock_search import MIN_STOCK_RELEVANCE, relevance_score, search_queries
 
 
 class VideoFetcher:
@@ -78,10 +78,9 @@ class VideoFetcher:
     def _video_metadata(video, provider):
         if provider == "Pexels":
             url = unquote(str(video.get("url") or ""))
-            slug = urlparse(url).path.rsplit("/", 1)[-1]
-            user = video.get("user") if isinstance(video.get("user"), dict) else {}
-            return " ".join((slug, str(video.get("alt") or ""), str(user.get("name") or "")))
-        return " ".join((str(video.get("tags") or ""), str(video.get("type") or ""), str(video.get("user") or "")))
+            slug = urlparse(url).path.strip("/").rsplit("/", 1)[-1]
+            return " ".join((slug, str(video.get("alt") or "")))
+        return " ".join((str(video.get("tags") or ""), str(video.get("type") or "")))
 
     def _search_pexels(self, query, query_rank, min_duration):
         if not self.api_key:
@@ -147,9 +146,10 @@ class VideoFetcher:
             return []
 
     def fetch_clip(self, query, index: int, min_dur: float = 5) -> str | None:
-        """Search a couple of focused variants, then rank usable candidates by metadata match."""
+        """Search focused variants and reject clips whose metadata weakly matches the scene."""
         self.last_source = None
         queries = search_queries(query, max_queries=2)
+        match_queries = search_queries(query, max_queries=8)
         target_duration = self._duration(query)
         if not queries:
             return None
@@ -179,11 +179,16 @@ class VideoFetcher:
         ranked = []
         for candidate in candidates.values():
             candidate["relevance"] = relevance_score(
-                queries, self._video_metadata(candidate["video"], candidate["provider"])
+                match_queries, self._video_metadata(candidate["video"], candidate["provider"])
             )
+            if candidate["relevance"] < MIN_STOCK_RELEVANCE:
+                continue
             duration_score = self._duration_score(self._duration(candidate["video"]), target_duration)
             candidate["rank_score"] = candidate["relevance"] + duration_score + (0.04 if candidate["provider"] == "Pexels" else 0.0)
             ranked.append(candidate)
+        if not ranked:
+            print(f"[video] Rejected stock clips below the {MIN_STOCK_RELEVANCE:.2f} scene-relevance threshold.")
+            return None
         ranked.sort(key=lambda item: (
             -item["rank_score"],
             0 if item["provider"] == "Pexels" else 1,
