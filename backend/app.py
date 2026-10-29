@@ -8,7 +8,7 @@ from flask_cors import CORS
 import common
 from common import ROOT_DIR
 from settings_store import APP_DATA_DIR, apply_environment, load_settings, public_settings, save_settings
-from local_qwen import MODEL_ID as LOCAL_QWEN_MODEL_ID, is_ready as local_qwen_is_ready, runtime_status as local_qwen_status, start_model_download
+from local_qwen import MODEL_ID as LOCAL_QWEN_MODEL_ID, is_ready as local_qwen_is_ready, readiness_message as local_qwen_readiness_message, runtime_status as local_qwen_status, start_model_download
 
 _boot_settings = load_settings()
 apply_environment(_boot_settings)
@@ -151,8 +151,9 @@ def create_batch():
     api_key=os.getenv("GROQ_API_KEY","").strip() if provider=="groq" else os.getenv("OPENROUTER_API_KEY","").strip()
     model=str(os.getenv("TEXT_MODEL","")).strip()
     if provider=="local":
+        local_status=local_qwen_status()
         if not local_qwen_is_ready():
-            return jsonify({"error":"Local Qwen is selected, but the model or llama.cpp runtime is not ready. Download the model in Settings and install local Qwen support."}),400
+            return jsonify({"error":local_qwen_readiness_message(local_status)}),400
         if not model:model=LOCAL_QWEN_MODEL_ID
     elif (not api_key or not model) and not local_qwen_is_ready():
         missing=f"Add your {provider_name} API key" if not api_key else f"Choose a {provider_name} text model"
