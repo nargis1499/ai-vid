@@ -103,7 +103,7 @@ def readiness_message(status=None) -> str:
     if not status.get("runtime_available"):
         detail = status.get("runtime_error")
         runtime = "llama.cpp runtime is unavailable" + (f" ({detail})" if detail else "")
-        runtime += ". Source install: pip install -r backend/requirements-local.txt; packaged app: install a build with Local Qwen support"
+        runtime += ". Web/source deployment: install backend/requirements-local.txt on the Python server and redeploy; packaged app: install a build with Local Qwen support"
         problems.append(runtime)
     return "; ".join(problems) or "Local Qwen is ready."
 
