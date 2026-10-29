@@ -9,8 +9,8 @@ from common import DIRS, ROOT_DIR
 
 class VideoAssembler:
     TRANSITION_DURATION = 0.5
-    # Choose a different requested transition randomly at each scene boundary.
-    TRANSITION_STYLES = ("spin-blur", "panel-slice", "shattered-glass")
+    # Randomly use the panel-slice or shattered-glass transition at each scene boundary.
+    TRANSITION_STYLES = ("panel-slice", "shattered-glass")
 
     def __init__(self):
         self.last_video_encoder = None
@@ -261,16 +261,13 @@ class VideoAssembler:
     @staticmethod
     def _apply_scene_transition(clip, style, duration, frame_size):
         """Animate the incoming scene over the outgoing scene with a per-pixel alpha mask."""
-        import math
         from functools import lru_cache
         import numpy as np
-        from PIL import Image, ImageDraw, ImageFilter
+        from PIL import Image, ImageFilter
         from moviepy.editor import VideoClip
 
         width, height = (int(frame_size[0]), int(frame_size[1]))
         duration = max(0.001, float(duration))
-        resampling = getattr(Image, "Resampling", Image).BICUBIC
-
         def smoothstep(value):
             value = min(1.0, max(0.0, float(value)))
             return value * value * (3.0 - 2.0 * value)
@@ -278,29 +275,7 @@ class VideoAssembler:
         def progress_at(t):
             return min(1.0, max(0.0, float(t) / duration))
 
-        if style == "spin-blur":
-            def render(t):
-                progress = progress_at(t)
-                source = Image.fromarray(np.asarray(clip.get_frame(t), dtype=np.uint8))
-                cx, cy = (width - 1) / 2.0, (height - 1) / 2.0
-                blurred = None
-                # Blend nearby rotational/zoom samples to create a radial motion blur.
-                for sample_index in range(3):
-                    sample_progress = min(1.0, max(0.0, progress + (sample_index - 1) * 0.055))
-                    angle = (1.0 - sample_progress) * math.radians(300.0)
-                    scale = 1.0 + (1.0 - sample_progress) * 0.55
-                    cos_a, sin_a = math.cos(angle) / scale, math.sin(angle) / scale
-                    affine = (
-                        cos_a, sin_a, cx - cos_a * cx - sin_a * cy,
-                        -sin_a, cos_a, cy + sin_a * cx - cos_a * cy,
-                    )
-                    sample = source.transform((width, height), Image.Transform.AFFINE, affine,
-                                              resample=resampling, fillcolor=(0, 0, 0))
-                    blurred = sample if blurred is None else Image.blend(blurred, sample, 1.0 / (sample_index + 1))
-                alpha = np.full((height, width), smoothstep(progress), dtype=np.float32)
-                return np.asarray(blurred, dtype=np.uint8).copy(), alpha
-
-        elif style == "panel-slice":
+        if style == "panel-slice":
             def render(t):
                 progress = progress_at(t)
                 frame = Image.fromarray(np.asarray(clip.get_frame(t), dtype=np.uint8))
