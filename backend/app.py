@@ -168,7 +168,7 @@ def create_batch():
     except (TypeError,ValueError):return jsonify({"error":"duration must be a number of seconds (at least 10)"}),400
     resolution=str(body.get("resolution","720p")).lower()
     if resolution not in {"720x480","720p","1080p"}:return jsonify({"error":"resolution must be 720x480, 720p, or 1080p"}),400
-    voice_speed=str(body.get("voice_speed","medium")).lower()
+    voice_speed=str(body.get("voice_speed","slow")).lower()
     if voice_speed not in {"slower","slow","medium","faster"}:return jsonify({"error":"voice_speed must be slower, slow, medium, or faster"}),400
     niche=str(body.get("niche","General"))[:80];privacy=body.get("privacy",os.getenv("YOUTUBE_PRIVACY_STATUS","private"))
     if privacy not in {"private","unlisted","public"}:return jsonify({"error":"privacy must be private, unlisted, or public"}),400

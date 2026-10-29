@@ -22,7 +22,7 @@ class BatchOrchestrator:
     def __init__(self):
         self.scripts=ScriptGenerator();self.audio=AudioGenerator();self.images=ImageGenerator();self.fetcher=VideoFetcher();self.assembler=VideoAssembler();self.thumbnails=ThumbnailGenerator();self.seo=YouTubeSEO();self.youtube=YouTubeUploader()
         self.batches={};self.lock=threading.RLock();self.pipeline_lock=threading.Lock();self.upload_lock=threading.Lock();self.cancel_events={};self.retry_contexts={};self.active_batch_id=None;self.sequence=int(time.time())
-    def start_batch(self,titles:list,duration:int,niche:str,auto_upload:bool,privacy:str,custom_scripts=None,resolution="720p",voice_speed="medium",thumbnail_only=False)->str:
+    def start_batch(self,titles:list,duration:int,niche:str,auto_upload:bool,privacy:str,custom_scripts=None,resolution="720p",voice_speed="slow",thumbnail_only=False)->str:
         batch_id=datetime.utcnow().strftime("%Y%m%dT%H%M%S")+"-"+uuid.uuid4().hex[:6]
         data={"batch_id":batch_id,"created_at":datetime.utcnow().isoformat()+"Z","status":"queued","total":len(titles),"completed":0,"failed":0,"cancelled":0,"progress":0,"resolution":resolution,"voice_speed":voice_speed,"thumbnail_only":thumbnail_only,"auto_upload":auto_upload,"privacy":privacy,"videos":[{"title":t,"thumbnail_only":thumbnail_only,"status":"waiting","progress":0,"current_stage":"Waiting","progress_message":"Queued","upload_status":"not_requested","steps":{key:"pending" for key in VIDEO_STEP_KEYS},"step_messages":{}} for t in titles],"error":None}
         with self.lock:
@@ -89,7 +89,7 @@ class BatchOrchestrator:
             if stage=="upload":
                 video.update(upload_status="uploading",upload_progress=0,upload_error=None,upload_message=message)
             batch["progress"]=round(100*(batch["completed"]+progress/100)/max(1,batch["total"]))
-    def _process_batch(self,batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts=None,resolution="720p",voice_speed="medium",thumbnail_only=False):
+    def _process_batch(self,batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts=None,resolution="720p",voice_speed="slow",thumbnail_only=False):
         # Serialize independent batches too: avoid overlapping CPU-heavy media pipelines.
         try:
             with self.pipeline_lock:
@@ -138,7 +138,7 @@ class BatchOrchestrator:
                     batch["failed"]+=1
                 batch.update(status="failed",error=error,finished_at=datetime.utcnow().isoformat()+"Z")
                 batch["progress"]=round(100*batch["completed"]/max(1,batch["total"]))
-    def _run_batch_locked(self,batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts=None,resolution="720p",voice_speed="medium",thumbnail_only=False):
+    def _run_batch_locked(self,batch_id,titles,duration,niche,auto_upload,privacy,custom_scripts=None,resolution="720p",voice_speed="slow",thumbnail_only=False):
         self._check_cancel(batch_id)
         self._set(batch_id,status="running")
         for index,title in enumerate(titles):
@@ -196,7 +196,7 @@ class BatchOrchestrator:
             candidate=stem[:100-len(suffix)].rstrip("-._")+suffix
             counter+=1
         return candidate
-    def _process_single_video(self,title,index,duration,niche,batch_id,auto_upload,privacy,custom_script=None,resolution="720p",voice_speed="medium",thumbnail_only=False,retry_from=None):
+    def _process_single_video(self,title,index,duration,niche,batch_id,auto_upload,privacy,custom_script=None,resolution="720p",voice_speed="slow",thumbnail_only=False,retry_from=None):
         self._check_cancel(batch_id)
         key=(batch_id,index)
         with self.lock:

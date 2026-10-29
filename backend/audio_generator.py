@@ -18,13 +18,13 @@ class AudioGenerator:
         self.voice = os.getenv("EDGE_TTS_VOICE", "en-US-AriaNeural")
         self.last_engine = ""
         self.last_warning = ""
-        self.last_speed = "medium"
+        self.last_speed = "slow"
         self._cancel_event = threading.Event()
 
-    def generate(self, text: str, index: int, speed: str = "medium", cancel_check=None) -> str:
+    def generate(self, text: str, index: int, speed: str = "slow", cancel_check=None) -> str:
         if not str(text or "").strip():
             raise RuntimeError("The scene has no narration text to speak.")
-        speed = str(speed or "medium").strip().lower()
+        speed = str(speed or "slow").strip().lower()
         if speed not in {"slower", "slow", "medium", "faster"}:
             raise ValueError("Voiceover pace must be Slower, Slow, Medium, or Faster.")
         self._cancel_event.clear()
