@@ -3,11 +3,12 @@ import json
 import os
 import re
 
-import requests
+from text_completion import complete_json
+from local_qwen import is_ready as local_qwen_is_ready
 
 
 class ScriptGenerator:
-    PROVIDER_NAMES = {"openrouter": "OpenRouter", "groq": "Groq (GroqCloud)"}
+    PROVIDER_NAMES = {"openrouter": "OpenRouter", "groq": "Groq (GroqCloud)", "local": "Local Qwen3 1.7B Q4_K_M"}
     PROVIDER_URLS = {
         "openrouter": "https://openrouter.ai/api/v1/chat/completions",
         "groq": "https://api.groq.com/openai/v1/chat/completions",
@@ -24,9 +25,9 @@ class ScriptGenerator:
 
     def configure(self, provider, model, openrouter_api_key="", groq_api_key=""):
         self.provider = str(provider or "openrouter").strip().lower()
-        if self.provider not in self.PROVIDER_URLS:
+        if self.provider not in {*self.PROVIDER_URLS, "local"}:
             self.provider = "openrouter"
-        self.model = str(model or "").strip()
+        self.model = str(model or "").strip() or ("qwen3-1.7b-q4_k_m" if self.provider == "local" else "")
         self.api_key = str(groq_api_key if self.provider == "groq" else openrouter_api_key or "").strip()
         if self.provider == "groq":
             self.api_key = str(groq_api_key or "").strip()
@@ -37,65 +38,19 @@ class ScriptGenerator:
         self.openrouter_model = self.model
 
     def _require_provider(self):
-        if not self.api_key:
-            raise RuntimeError(f"{self.provider_name} is not configured. Add its API key in Settings before generating scripts.")
-        if not self.model:
-            raise RuntimeError(f"Choose a {self.provider_name} text model in Settings before generating scripts.")
+        if self.provider == "local":
+            if not local_qwen_is_ready():
+                raise RuntimeError("Local Qwen is selected, but its GGUF model or llama.cpp runtime is not ready. Download the model in Settings and install local Qwen support.")
+            return
+        # Hosted-provider failures are handled by the shared client, which can fall back to Qwen.
 
-    def _chat(self, prompt: str, *, temperature: float, max_tokens: int, task: str) -> str:
-        self._require_provider()
-        try:
-            headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-            if self.provider == "openrouter":
-                headers["X-Title"] = "CreatorFlow"
-            request_body = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": "You write accurate, useful video narration and scene plans. Follow the requested structure and return valid JSON only."},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            }
-            # Groq's GPT-OSS models can spend a large part of a small completion budget
-            # on internal reasoning. Keep that budget low so the requested JSON can finish.
-            if self.provider == "groq" and "gpt-oss" in self.model.lower():
-                request_body["reasoning_effort"] = "low"
-            response = requests.post(
-                self.PROVIDER_URLS[self.provider],
-                headers=headers,
-                json=request_body,
-                timeout=180,
-            )
-        except requests.RequestException as exc:
-            raise RuntimeError(f"Could not reach {self.provider_name} for {task} ({type(exc).__name__}: {exc}). Check your connection and try again.") from exc
-        if not response.ok:
-            try:
-                payload = response.json()
-                detail = (payload.get("error") or {}).get("message") if isinstance(payload, dict) else None
-            except (ValueError, TypeError):
-                detail = None
-            detail = str(detail or response.text or "").strip()[:500]
-            raise RuntimeError(
-                f"{self.provider_name} returned HTTP {response.status_code} while {task}: "
-                f"{detail or 'request failed'}. Check the API key, selected model, and account limits."
-            )
-        try:
-            payload = response.json()
-            choice = payload["choices"][0]
-            if str(choice.get("finish_reason") or "").lower() == "length":
-                raise RuntimeError(
-                    f"{self.provider_name} reached the {max_tokens}-token output ceiling while {task}; "
-                    "the response may be incomplete. Try a shorter video duration or another model."
-                )
-            content = choice["message"]["content"]
-            if isinstance(content, list):
-                content = "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
-            if not str(content or "").strip():
-                raise ValueError("empty response")
-            return str(content)
-        except (ValueError, TypeError, KeyError, IndexError) as exc:
-            raise RuntimeError(f"{self.provider_name} did not return a usable response while {task}. Try another text model.") from exc
+    def _chat(self, prompt: str, *, temperature: float, max_tokens: int, task: str, validator=None) -> str:
+        system = "You write accurate, useful video narration and scene plans. Follow the requested structure and return valid JSON only."
+        content, self.last_completion_source = complete_json(
+            self.provider, self.model, self.api_key, system, prompt,
+            temperature=temperature, max_tokens=max_tokens, task=task, validator=validator,
+        )
+        return content
 
     def generate_script(self, title: str, duration: int) -> dict:
         """Generate the final narration and scene plan in one provider request."""
@@ -109,6 +64,7 @@ class ScriptGenerator:
                 temperature=0.7,
                 max_tokens=self._max_output_tokens(duration, scene_count),
                 task="generating the script and scene plan",
+                validator=lambda payload: self._normalize_script_output(payload, title, duration, custom_script_reviewed=False),
             ))
             script = self._normalize_script_output(data, title, duration, custom_script_reviewed=False)
         except (ValueError, TypeError, KeyError, IndexError) as exc:
@@ -116,7 +72,7 @@ class ScriptGenerator:
                 f"{self.provider_name} did not return a usable final script and scene plan "
                 f"({type(exc).__name__}: {exc}). Try again or choose another text model."
             ) from exc
-        self.last_source = f"{self.provider_name} · {self.model} (single-pass)"
+        self.last_source = f"{self.last_completion_source} (single-pass)"
         return script
 
     def _max_output_tokens(self, duration: int, scene_count: int) -> int:
@@ -141,7 +97,7 @@ class ScriptGenerator:
             "custom_script": text,
         }, ensure_ascii=False)
         reviewed = self._review_draft(title, source, duration, source_label="custom script")
-        self.last_source = f"{self.provider_name} · {self.model} (custom draft review)"
+        self.last_source = f"{self.last_completion_source} (custom draft review)"
         return reviewed
 
     def _review_draft(self, title: str, source: str, duration: int, source_label: str) -> dict:
@@ -168,6 +124,7 @@ RAW {source_label} data: {source}'''
                 temperature=0.25,
                 max_tokens=self._max_output_tokens(duration, scene_count),
                 task=f"reviewing the {source_label} and finalizing its script and scene plan",
+                validator=lambda payload: self._normalize_script_output(payload, title, duration, custom_script_reviewed=True),
             ))
             return self._normalize_script_output(data, title, duration, custom_script_reviewed=True)
         except (ValueError, TypeError, KeyError, IndexError) as exc:

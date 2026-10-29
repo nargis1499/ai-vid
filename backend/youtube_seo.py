@@ -3,11 +3,11 @@ import json
 import os
 import re
 
-import requests
+from text_completion import complete_json
 
 
 class YouTubeSEO:
-    PROVIDER_NAMES = {"openrouter": "OpenRouter", "groq": "Groq (GroqCloud)"}
+    PROVIDER_NAMES = {"openrouter": "OpenRouter", "groq": "Groq (GroqCloud)", "local": "Local Qwen3 1.7B Q4_K_M"}
     PROVIDER_URLS = {
         "openrouter": "https://openrouter.ai/api/v1/chat/completions",
         "groq": "https://api.groq.com/openai/v1/chat/completions",
@@ -24,15 +24,13 @@ class YouTubeSEO:
 
     def configure(self, provider, model, openrouter_api_key="", groq_api_key=""):
         self.provider = str(provider or "openrouter").strip().lower()
-        if self.provider not in self.PROVIDER_URLS:
+        if self.provider not in {*self.PROVIDER_URLS, "local"}:
             self.provider = "openrouter"
-        self.model = str(model or "").strip()
+        self.model = str(model or "").strip() or ("qwen3-1.7b-q4_k_m" if self.provider == "local" else "")
         self.provider_name = self.PROVIDER_NAMES[self.provider]
         self.api_key = str(groq_api_key or "").strip() if self.provider == "groq" else str(openrouter_api_key or "").strip()
 
     def generate_seo_package(self, title: str, script: dict, niche: str) -> dict:
-        if not self.api_key or not self.model:
-            raise RuntimeError(f"{self.provider_name} API key and text model are required to generate video metadata.")
         scene_brief = [
             {
                 "visual": str(scene.get("visual_description", ""))[:180],
@@ -44,40 +42,23 @@ class YouTubeSEO:
         ]
         prompt = f'''Create YouTube SEO metadata for title {title!r}, niche {niche!r}, script summary {script.get('description','')!r}, and scene plan {scene_brief!r}. Return only JSON: {{"seo_title":"max 60 characters","seo_description":"500-1000 characters, keywords in first 150 chars, CTA, hashtags at end","tags":["15 relevant tags"],"category_id":"22","hashtag_line":"#tag1 #tag2 #tag3","thumbnail_text":"3-5 punchy words for a bold thumbnail headline, grounded in the script","thumbnail_subtitle":"short supporting phrase of 2-5 words, not a repetition of the headline","thumbnail_panels":["one distinct 1-3 word label per supplied scene, in scene-plan order, up to 10 labels"],"thumbnail_style":"visual description","pinned_comment":"engaging comment"}}. Make thumbnail wording specific to the video's actual subject and scene plan; preserve both named subjects in numbered lists/comparisons, separated with an ampersand; never invent places, people, or claims.'''
         try:
-            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-            if self.provider == "openrouter":
-                headers["X-Title"] = "CreatorFlow"
-            response = requests.post(
-                self.PROVIDER_URLS[self.provider],
-                headers=headers,
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": "You create accurate YouTube SEO metadata and thumbnail copy. Return valid JSON only."},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "temperature": 0.4,
-                    "max_tokens": 3000,
-                },
-                timeout=120,
+            content, source = complete_json(
+                self.provider,
+                self.model,
+                self.api_key,
+                "You create accurate YouTube SEO metadata and thumbnail copy. Return valid JSON only.",
+                prompt,
+                temperature=0.4,
+                max_tokens=3000,
+                task="generating video metadata and thumbnail copy",
+                validator=lambda payload: self._normalize(payload, title, niche),
             )
-            if not response.ok:
-                try:
-                    payload = response.json()
-                    detail = (payload.get("error") or {}).get("message") if isinstance(payload, dict) else None
-                except (ValueError, TypeError):
-                    detail = None
-                detail = str(detail or response.text or "").strip()[:500]
-                raise RuntimeError(f"{self.provider_name} returned HTTP {response.status_code}: {detail or 'request failed'}")
-            payload = response.json()
-            content = payload["choices"][0]["message"]["content"]
-            if isinstance(content, list):
-                content = "".join(str(part.get("text") or "") for part in content if isinstance(part, dict))
             data = self._parse_json(content)
-            self.last_source = f"{self.provider_name} · {self.model}"
-            return self._normalize(data, title, niche)
-        except (requests.RequestException, ValueError, TypeError, KeyError, IndexError) as exc:
-            raise RuntimeError(f"Could not generate video metadata with {self.provider_name} ({type(exc).__name__}: {exc}). Check the selected model and account quota, then retry.") from exc
+            normalized = self._normalize(data, title, niche)
+            self.last_source = source
+            return normalized
+        except Exception as exc:
+            raise RuntimeError(f"Could not generate video metadata ({type(exc).__name__}: {exc}).") from exc
 
     @staticmethod
     def _parse_json(raw):

@@ -17,6 +17,7 @@ SETTINGS_FILE = APP_DATA_DIR / "settings.json"
 DEFAULTS = {
     "TEXT_PROVIDER": "openrouter",
     "TEXT_MODEL": "",
+    "LOCAL_QWEN_MODEL_PATH": str(APP_DATA_DIR / "models" / "Qwen3-1.7B-Q4_K_M.gguf"),
     "OPENROUTER_API_KEY": "",
     "GROQ_API_KEY": "",
     "EDGE_TTS_VOICE": "en-US-AriaNeural",
@@ -56,8 +57,10 @@ def load_settings():
             values["TEXT_MODEL"] = os.getenv("OPENROUTER_MODEL", "").strip()
     if values["TEXT_PROVIDER"] == "grok":
         values["TEXT_PROVIDER"] = "groq"
-    if values["TEXT_PROVIDER"] not in {"openrouter", "groq"}:
+    if values["TEXT_PROVIDER"] not in {"openrouter", "groq", "local"}:
         values["TEXT_PROVIDER"] = "openrouter"
+    if values["TEXT_PROVIDER"] == "local" and not values["TEXT_MODEL"]:
+        values["TEXT_MODEL"] = "qwen3-1.7b-q4_k_m"
     if not values["OUTPUT_DIR"]:
         if getattr(sys, "frozen", False):
             values["OUTPUT_DIR"] = str(APP_DATA_DIR / "output")
@@ -80,8 +83,8 @@ def save_settings(updates):
             current[key] = str(value or "").strip()
         else:
             current[key] = str(value).strip()
-    if current["TEXT_PROVIDER"] not in {"openrouter", "groq"}:
-        raise ValueError("Text provider must be OpenRouter or Groq.")
+    if current["TEXT_PROVIDER"] not in {"openrouter", "groq", "local"}:
+        raise ValueError("Text provider must be OpenRouter, Groq, or Local Qwen.")
     if current["YOUTUBE_PRIVACY_STATUS"] not in {"private", "unlisted", "public"}:
         raise ValueError("YouTube privacy must be private, unlisted, or public.")
     if not 1 <= current["MAX_UPLOADS_PER_DAY"] <= 50:

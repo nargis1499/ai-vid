@@ -10,5 +10,7 @@ backend/dist/
 backend/build/
 backend/*.spec
 output/**
+*.gguf
+*.gguf.part
 !output/.gitkeep
 .DS_Store

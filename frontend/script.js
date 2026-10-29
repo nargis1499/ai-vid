@@ -1,6 +1,6 @@
-const $=s=>document.querySelector(s);const titlesEl=$('#titles');let activeBatch=null,pollTimer=null,toastTimer,lastTerminalToastBatch=null,textProvider='openrouter',modelLoadToken=0;const selectedTextModels={openrouter:'',groq:''};
+const $=s=>document.querySelector(s);const titlesEl=$('#titles');let activeBatch=null,pollTimer=null,toastTimer,lastTerminalToastBatch=null,textProvider='openrouter',modelLoadToken=0,localModelPollTimer=null;const selectedTextModels={openrouter:'',groq:'',local:''};
 const VIDEO_STEPS=[
- {key:'script',label:'Script & scene plan',hint:'The selected text provider writes and reviews narration and scene plans, including custom drafts.'},
+ {key:'script',label:'Script & scene plan',hint:'The selected text model generates narration and scenes; if a hosted call fails, Local Qwen can take over this step.'},
  {key:'images',label:'Find footage & create visuals',hint:'Prefer the closest Pexels or Pixabay clip, then a stock still or designed gradient fallback.'},
  {key:'clips',label:'Use footage & transitions',hint:'Scene cuts randomly use panel slices, glass shards, swish pans, light leaks, split wipes, or luma dissolves.'},
  {key:'audio',label:'Generate voice narration',hint:'Create narration at the selected Slow, Medium, or Faster pace.'},
@@ -52,7 +52,7 @@ function renderCustomScriptEditors(){const wrap=$('#custom-script-editors');cons
 titlesEl.addEventListener('input',()=>{const n=titlesEl.value.split('\n').map(x=>x.trim()).filter(Boolean).length;$('#title-count').textContent=`${n} title${n===1?'':'s'}`;if($('#use-custom-script').checked)renderCustomScriptEditors()});
 $('#use-custom-script').addEventListener('change',event=>{const panel=$('#custom-scripts-panel');panel.classList.toggle('hidden',!event.target.checked);if(event.target.checked)renderCustomScriptEditors()});
 $('#generate').addEventListener('click',startBatch);$('#thumbnail-only').addEventListener('change',updateThumbnailOnlyMode);$('#stop-batch').addEventListener('click',stopBatch);$('#video-list').addEventListener('click',handleVideoAction);$('#refresh-batches').addEventListener('click',loadHistory);
-$('#help-button').addEventListener('click',()=>toast('See Settings to choose OpenRouter or Groq, configure its API key, and select a model.'));
+$('#help-button').addEventListener('click',()=>toast('See Settings to choose OpenRouter, Groq, or Local Qwen; download Qwen there for automatic hosted-text fallback.'));
 const openSettings=()=>{loadSettingsForm();$('#settings-dialog').showModal()};$('#settings-button').addEventListener('click',openSettings);$('#open-settings-link').addEventListener('click',event=>{event.preventDefault();openSettings()});
 $('#close-settings').addEventListener('click',()=>$('#settings-dialog').close());
 $('#cancel-settings').addEventListener('click',()=>$('#settings-dialog').close());
@@ -61,6 +61,7 @@ $('#save-settings').addEventListener('click',saveSettingsForm);
 document.querySelectorAll('.provider-choice').forEach(button=>button.addEventListener('click',()=>changeTextProvider(button.dataset.textProvider)));
 $('#setting-text-model').addEventListener('change',()=>selectedTextModels[textProvider]=$('#setting-text-model').value);
 $('#refresh-text-models').addEventListener('click',()=>loadTextModels(textProvider,$('#setting-text-model').value,true));
+$('#download-qwen-model').addEventListener('click',downloadLocalModel);
 $('#youtube-credentials-file').addEventListener('change',uploadYoutubeCredentials);
 $('#connect-youtube').addEventListener('click',async()=>{const btn=$('#connect-youtube');btn.disabled=true;btn.textContent='Opening Google sign-in…';try{const r=await fetch('/api/youtube/auth',{method:'POST'});const d=await r.json();if(!r.ok)throw new Error(d.error||'Could not connect YouTube');toast('YouTube channel connected.');await loadYoutubeStatus()}catch(e){toast(e.message||'YouTube sign-in did not complete. Run the app locally and try again.')}finally{btn.disabled=false;btn.innerHTML='<i class="fa-brands fa-youtube"></i> Connect channel'}});
 function updateThumbnailOnlyMode(){const enabled=$('#thumbnail-only').checked;const autoUpload=$('#auto-upload');if(enabled)autoUpload.checked=false;autoUpload.disabled=enabled;$('#generate').querySelector('span:nth-child(2)').textContent=enabled?'Generate thumbnails':'Generate video batch'}
@@ -171,6 +172,7 @@ function stepsLabel(steps){if(!steps)return'Processing';const names={script:'Scr
 function escapeHtml(value){return String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 async function loadYoutubeStatus(){try{const r=await fetch('/api/youtube/status');const d=await r.json();$('#youtube-state').textContent=d.connected?'Connected':'Not connected';$('#youtube-dot').classList.toggle('green',d.connected);$('#youtube-detail').textContent=d.connected?`${d.uploads_today} of ${d.max_uploads_per_day} daily uploads used.`:(d.error||'Connect your channel to enable publishing.');$('#connect-youtube').innerHTML=d.connected?'<i class="fa-solid fa-check"></i> Channel connected':'<i class="fa-brands fa-youtube"></i> Connect channel'}catch(e){$('#youtube-state').textContent='Offline'}}
 function modelPriceLabel(model,provider){
+ if(provider==='local')return'Local · no API charge';
  if(model.free)return'FREE';
  if(provider==='groq')return'GroqCloud API';
  if(model.input_price==null||model.output_price==null)return'pricing varies';
@@ -179,14 +181,16 @@ function modelPriceLabel(model,provider){
  return'pricing varies'
 }
 function applyTextProvider(provider){
- textProvider=provider==='groq'?'groq':'openrouter';
+ textProvider=['groq','local'].includes(provider)?provider:'openrouter';
  document.querySelectorAll('.provider-choice').forEach(button=>{
   const active=button.dataset.textProvider===textProvider;
   button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));
  });
  $('#provider-openrouter-panel').hidden=textProvider!=='openrouter';
  $('#provider-groq-panel').hidden=textProvider!=='groq';
- $('#active-text-provider').textContent=textProvider==='groq'?'Groq AI':'OpenRouter AI';
+ $('#provider-local-panel').hidden=textProvider!=='local';
+ $('#active-text-provider').textContent=textProvider==='groq'?'Groq AI':textProvider==='local'?'Local Qwen':'OpenRouter AI';
+ if(textProvider==='local')loadLocalModelStatus();
 }
 function changeTextProvider(provider){
  selectedTextModels[textProvider]=$('#setting-text-model').value;
@@ -228,10 +232,33 @@ async function loadTextModels(provider=textProvider,selected='',refresh=false){
   status.textContent=error.message||`Could not load ${provider} models.`
  }
 }
+function formatFileSize(bytes){if(!bytes)return'';const units=['B','KB','MB','GB'];let value=Number(bytes),unit=0;while(value>=1024&&unit<units.length-1){value/=1024;unit++}return`${value.toFixed(unit<2?0:1)} ${units[unit]}`}
+async function loadLocalModelStatus(){
+ try{
+  const response=await fetch('/api/local-model/status'),status=await response.json();if(!response.ok)throw new Error(status.error||'Could not check local model');
+  const downloading=status.status==='downloading',available=Boolean(status.model_available),button=$('#download-qwen-model');
+  $('#local-model-state').textContent=downloading?'Downloading Qwen3 model…':available?'Qwen3 1.7B Q4_K_M is downloaded':status.status==='failed'?'Download failed':'Qwen3 model is not downloaded';
+  $('#local-model-path').textContent=status.model_path||'';
+  $('#local-runtime-state').textContent=status.runtime_available?'llama.cpp CPU runtime is installed.':`Local runtime is missing. Source users: install backend/requirements-local.txt; desktop users: install a build with local Qwen support. ${status.error||''}`;
+  button.disabled=downloading||available;button.textContent=downloading?'Downloading…':available?'Model downloaded':status.status==='failed'?'Retry model download':'Download Qwen3 model';
+  const progress=$('#local-model-progress');progress.hidden=!downloading;
+  if(downloading){
+   const percent=status.total_bytes?Math.min(100,Math.round(100*status.downloaded_bytes/status.total_bytes)):0;
+   $('#local-model-progress-bar').value=percent;$('#local-model-progress-percent').textContent=status.total_bytes?`${percent}%`:formatFileSize(status.downloaded_bytes);
+   $('#local-model-progress-label').textContent=status.total_bytes?`${formatFileSize(status.downloaded_bytes)} of ${formatFileSize(status.total_bytes)}`:`Downloaded ${formatFileSize(status.downloaded_bytes)}`;
+   if(!localModelPollTimer)localModelPollTimer=setInterval(loadLocalModelStatus,1500);
+  }else if(localModelPollTimer){clearInterval(localModelPollTimer);localModelPollTimer=null}
+  if(status.status==='failed')$('#settings-text-status').textContent=status.error||'Model download failed. Retry from Settings.';
+ }catch(error){$('#local-model-state').textContent=error.message||'Could not check local model status'}
+}
+async function downloadLocalModel(){
+ const button=$('#download-qwen-model');button.disabled=true;button.textContent='Starting download…';
+ try{const response=await fetch('/api/local-model/download',{method:'POST'}),status=await response.json();if(!response.ok)throw new Error(status.error||'Could not start model download');await loadLocalModelStatus()}catch(error){button.disabled=false;button.textContent='Retry model download';toast(error.message||'Could not download the local model')}
+}
 async function loadSettingsForm(){
  try{
   const response=await fetch('/api/settings'),s=await response.json();if(!response.ok)throw new Error(s.error||'Could not load settings');
-  textProvider=s.TEXT_PROVIDER==='groq'?'groq':'openrouter';selectedTextModels.openrouter='';selectedTextModels.groq='';selectedTextModels[textProvider]=s.TEXT_MODEL||'';applyTextProvider(textProvider);
+  textProvider=['groq','local'].includes(s.TEXT_PROVIDER)?s.TEXT_PROVIDER:'openrouter';selectedTextModels.openrouter='';selectedTextModels.groq='';selectedTextModels.local='';selectedTextModels[textProvider]=s.TEXT_MODEL||'';applyTextProvider(textProvider);
   $('#setting-openrouter-key').value='';$('#setting-openrouter-key').placeholder=s.OPENROUTER_API_KEY_CONFIGURED?'Key saved — leave blank to keep it':'Paste OpenRouter API key';$('#openrouter-configured').textContent=s.OPENROUTER_API_KEY_CONFIGURED?'Saved locally':'';$('#clear-openrouter-key').checked=false;
   $('#setting-groq-key').value='';$('#setting-groq-key').placeholder=s.GROQ_API_KEY_CONFIGURED?'Key saved — leave blank to keep it':'Paste Groq (GroqCloud) API key';$('#groq-configured').textContent=s.GROQ_API_KEY_CONFIGURED?'Saved locally':'';$('#clear-groq-key').checked=false;
   loadTextModels(textProvider,s.TEXT_MODEL||'');
@@ -251,7 +278,7 @@ async function saveSettingsForm(){
  const groqKey=$('#setting-groq-key').value.trim();if(groqKey)payload.GROQ_API_KEY=groqKey;
  try{
   const response=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),data=await response.json();if(!response.ok)throw new Error(data.error||'Could not save settings');
-  selectedTextModels[textProvider]=data.TEXT_MODEL||selectedModel;$('#active-text-provider').textContent=textProvider==='groq'?'Groq AI':'OpenRouter AI';
+  selectedTextModels[textProvider]=data.TEXT_MODEL||selectedModel;$('#active-text-provider').textContent=textProvider==='groq'?'Groq AI':textProvider==='local'?'Local Qwen':'OpenRouter AI';
   $('#setting-pexels-key').value='';$('#setting-pixabay-key').value='';$('#setting-openrouter-key').value='';$('#setting-groq-key').value='';
   $('#setting-openrouter-key').placeholder=data.OPENROUTER_API_KEY_CONFIGURED?'Key saved — leave blank to keep it':'Paste OpenRouter API key';$('#openrouter-configured').textContent=data.OPENROUTER_API_KEY_CONFIGURED?'Saved locally':'';
   $('#setting-groq-key').placeholder=data.GROQ_API_KEY_CONFIGURED?'Key saved — leave blank to keep it':'Paste Groq (GroqCloud) API key';$('#groq-configured').textContent=data.GROQ_API_KEY_CONFIGURED?'Saved locally':'';
@@ -263,5 +290,5 @@ async function saveSettingsForm(){
 }
 async function uploadYoutubeCredentials(){const input=$('#youtube-credentials-file');const file=input.files&&input.files[0];if(!file)return;const label=$('#youtube-credential-label');label.textContent='Saving OAuth credentials…';try{const form=new FormData();form.append('file',file);const r=await fetch('/api/youtube/credentials',{method:'POST',body:form});const d=await r.json();if(!r.ok)throw new Error(d.error||'Could not save credentials');label.textContent='Google OAuth credentials are configured';await loadYoutubeStatus();toast('Google OAuth credentials saved locally.')}catch(e){label.textContent=e.message;toast(e.message)}finally{input.value=''}}
 async function loadHistory(){try{const r=await fetch('/api/batch/list');const d=await r.json();const list=d.batches||[];$('#queue-count').textContent=list.filter(x=>x.status==='running'||x.status==='queued'||x.status==='stopping').length;if(!list.length){$('#batch-history').innerHTML='<div class="empty-history"><span><i class="fa-regular fa-folder-open"></i></span><b>Your workspace is ready</b><small>Created batches will show up here.</small></div>';return}$('#batch-history').innerHTML=list.slice(0,5).map(b=>`<div class="history-card"><div><b>${b.total} video${b.total===1?'':'s'} · ${escapeHtml(b.batch_id)}</b><small>${new Date(b.created_at).toLocaleString()} · ${b.completed}/${b.total} processed</small></div><span class="history-state">${escapeHtml(b.status.toUpperCase())}</span></div>`).join('')}catch(e){}}
-async function loadSavedDefaults(){try{const r=await fetch('/api/settings');const s=await r.json();if(s.YOUTUBE_PRIVACY_STATUS)$('#privacy').value=s.YOUTUBE_PRIVACY_STATUS;if(s.TEXT_PROVIDER)$('#active-text-provider').textContent=s.TEXT_PROVIDER==='groq'?'Groq AI':'OpenRouter AI'}catch(e){}}
+async function loadSavedDefaults(){try{const r=await fetch('/api/settings');const s=await r.json();if(s.YOUTUBE_PRIVACY_STATUS)$('#privacy').value=s.YOUTUBE_PRIVACY_STATUS;if(s.TEXT_PROVIDER)$('#active-text-provider').textContent=s.TEXT_PROVIDER==='groq'?'Groq AI':s.TEXT_PROVIDER==='local'?'Local Qwen':'OpenRouter AI'}catch(e){}}
 loadYoutubeStatus();loadHistory();loadSavedDefaults();

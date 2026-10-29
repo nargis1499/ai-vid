@@ -8,6 +8,7 @@ from flask_cors import CORS
 import common
 from common import ROOT_DIR
 from settings_store import APP_DATA_DIR, apply_environment, load_settings, public_settings, save_settings
+from local_qwen import MODEL_ID as LOCAL_QWEN_MODEL_ID, is_ready as local_qwen_is_ready, runtime_status as local_qwen_status, start_model_download
 
 _boot_settings = load_settings()
 apply_environment(_boot_settings)
@@ -146,10 +147,16 @@ def create_batch():
     titles=[str(t).strip()[:200] for t in titles if str(t).strip()]
     if not titles:return jsonify({"error":"Enter at least one video title."}),400
     provider=str(os.getenv("TEXT_PROVIDER","openrouter")).strip().lower()
-    provider_name="Groq (GroqCloud)" if provider=="groq" else "OpenRouter"
+    provider_name="Groq (GroqCloud)" if provider=="groq" else "OpenRouter" if provider=="openrouter" else "Local Qwen3 1.7B Q4_K_M"
     api_key=os.getenv("GROQ_API_KEY","").strip() if provider=="groq" else os.getenv("OPENROUTER_API_KEY","").strip()
-    if not api_key:return jsonify({"error":f"Add your {provider_name} API key in Settings before generating videos."}),400
-    if not os.getenv("TEXT_MODEL","").strip():return jsonify({"error":f"Choose a {provider_name} text model in Settings before generating videos."}),400
+    model=str(os.getenv("TEXT_MODEL","")).strip()
+    if provider=="local":
+        if not local_qwen_is_ready():
+            return jsonify({"error":"Local Qwen is selected, but the model or llama.cpp runtime is not ready. Download the model in Settings and install local Qwen support."}),400
+        if not model:model=LOCAL_QWEN_MODEL_ID
+    elif (not api_key or not model) and not local_qwen_is_ready():
+        missing=f"Add your {provider_name} API key" if not api_key else f"Choose a {provider_name} text model"
+        return jsonify({"error":f"{missing} in Settings, or download Local Qwen to enable automatic fallback."}),400
     if len(titles)>30:return jsonify({"error":"A batch can contain at most 30 titles."}),400
     custom_scripts=body.get("custom_scripts")
     if custom_scripts is not None:
@@ -228,11 +235,26 @@ def get_thumbnail(batch_id,index):
     if not path or not Path(path).is_file():return jsonify({"error":"Thumbnail is not ready"}),404
     return send_file(path,as_attachment=True,download_name=Path(path).name,mimetype="image/jpeg")
 
+@app.get("/api/local-model/status")
+def local_model_status():
+    return jsonify(local_qwen_status())
+
+@app.post("/api/local-model/download")
+def download_local_model():
+    status=start_model_download()
+    if status.get("status")=="failed":
+        return jsonify(status),500
+    return jsonify(status),202
+
 @app.get("/api/text/models")
 def text_models():
     provider=str(request.args.get("provider","openrouter")).strip().lower()
     if provider=="grok":
         provider="groq"
+    if provider=="local":
+        status=local_qwen_status()
+        notice=("Local GGUF model and llama.cpp CPU runtime are ready." if status.get("model_available") and status.get("runtime_available") else "The model is downloaded; install the llama.cpp CPU runtime." if status.get("model_available") else "Download the GGUF model below. Local inference also requires the llama.cpp CPU runtime, included in desktop builds.")
+        return jsonify({"models":[{"id":LOCAL_QWEN_MODEL_ID,"name":"Qwen3 1.7B · Q4_K_M (local)","context_length":8192,"free":True}],"provider":"local","free_only":True,"notice":notice})
     if provider=="openrouter":
         try:
             return jsonify({"models":_openrouter_models(request.args.get("refresh")=="1"),"provider":provider,"free_only":True})
@@ -245,7 +267,7 @@ def text_models():
         except (requests.RequestException,ValueError,TypeError) as exc:
             fallback=[{"id":model,"name":model,"free":False} for model in _GROQ_FALLBACK_MODELS]
             return jsonify({"models":fallback,"provider":provider,"free_only":False,"notice":f"The live GroqCloud catalog could not be loaded ({exc}); showing fallback model choices. Check your GroqCloud key and connection."})
-    return jsonify({"error":"Choose OpenRouter or Groq as the text provider."}),400
+    return jsonify({"error":"Choose OpenRouter, Groq, or Local Qwen as the text provider."}),400
 
 @app.get("/api/settings")
 def get_settings():

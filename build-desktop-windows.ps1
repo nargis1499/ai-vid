@@ -34,6 +34,7 @@ try {
         --collect-all webview `
         --collect-all clr_loader `
         --collect-all pythonnet `
+        --collect-all llama_cpp `
         --hidden-import webview.platforms.edgechromium `
         --hidden-import webview.platforms.winforms `
         desktop.py
