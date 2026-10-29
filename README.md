@@ -1,6 +1,6 @@
 # CreatorFlow — YouTube Video Automation
 
-CreatorFlow is a web app that turns video-title lists into narrated, edited videos with thumbnails and YouTube metadata. Scripts, scene plans, SEO metadata, and thumbnail copy use the **same selected hosted text provider and model**: OpenRouter or Groq (GroqCloud). The app does not load or run local AI models.
+CreatorFlow is a web app that turns video-title lists into narrated, edited videos with thumbnails and YouTube metadata. Scripts, scene plans, SEO metadata, and thumbnail copy use the **same selected text model**: OpenRouter, Groq (GroqCloud), or local Qwen3 1.7B Q4_K_M. When a hosted text request fails or returns invalid JSON, the app can automatically use the local Qwen model for that unfinished text step.
 
 ![CreatorFlow studio UI preview](screenshots/creator-studio-preview.png)
 
@@ -19,7 +19,7 @@ Open the URL printed by Flask (normally `http://localhost:5000`). Generated vide
 
 Open **Settings** in the web app:
 
-- **Text AI provider:** choose **OpenRouter** or **Groq (GroqCloud)** in Settings, select a model, and enter that provider's API key. OpenRouter's visible catalog contains free text-generation models only; Groq's catalog loads from GroqCloud after its API key is saved. Groq model availability and rate limits depend on your GroqCloud account. The selected provider/model handles regular and custom scripts, scene plans, SEO metadata, and thumbnail copy. Prompts and custom drafts are sent to the selected provider; API keys are stored in per-user settings and are not returned to the browser. If the provider is unavailable or returns incomplete output, generation fails rather than silently switching to a fallback.
+- **Text AI provider:** choose **OpenRouter**, **Groq (GroqCloud)**, or **Local Qwen** in Settings. OpenRouter's visible catalog contains free text-generation models only; Groq's catalog loads from GroqCloud after its API key is saved. The selected provider/model handles scripts, scene plans, SEO metadata, and thumbnail copy. When OpenRouter or Groq fails (including rate limits, connection errors, or invalid JSON), the app automatically retries only that text task with Local Qwen if the GGUF model and llama.cpp runtime are installed. API keys remain in per-user settings and are not returned to the browser. If Local Qwen is selected directly, these text tasks run locally without a cloud text API.
 - **Stock visuals:** The selected text model creates a few concrete stock-search phrases per scene. CreatorFlow searches Pexels and Pixabay, then ranks candidates using available metadata (alt text, tags, and URL terms), duration, landscape orientation, and resolution, with a slight Pexels preference. This is metadata matching, not visual inspection by a vision model. It prefers the closest available clip, then a stock still. If neither is available, it creates a designed gradient fallback; it does not download or run an image-generation model. Add stock API keys in Settings. Pixabay search results are cached locally and selected media is downloaded rather than hotlinked.
 - **Narration:** voiceovers use Microsoft's hosted Edge TTS service and require an internet connection. Choose a voice and pace in the video brief. If hosted narration fails, generation stops with an error—there is no Chatterbox or offline system-voice fallback.
 - **Music, transitions, and rendering:** background music is created procedurally (not with an AI model). Scene cuts randomly use alternating panel-slice, shattered-glass, directional swish-pan, warm light-leak flash, split-screen wipe, or luma-dissolve transitions. Video assembly and captions run on the app host; MP4 encoding always uses CPU-based H.264 libx264, with no GPU encoder path.
@@ -28,9 +28,11 @@ Open **Settings** in the web app:
 
 Settings and API keys are stored per-user under `%APPDATA%\CreatorFlow\settings.json` on Windows, or the platform's application-settings folder. OAuth credentials and tokens are also stored there. The settings file is local plaintext; protect your account and do not share the file.
 
-## No local AI models
+## Local Qwen model (no Ollama)
 
-CreatorFlow no longer depends on Ollama, SDXL/Diffusers, Chatterbox, or an offline TTS model. You do not need to install or download model weights. OpenRouter or Groq handles text-generation tasks; visuals come from licensed stock or a designed fallback, and narration uses hosted Edge TTS. Ordinary video editing and encoding still run locally on the app host.
+Settings includes a **Download Qwen3 model** option for `Qwen3-1.7B-Q4_K_M.gguf`. The model is downloaded to the per-user CreatorFlow data folder, never into Git or the application bundle. The local GGUF runs on CPU through `llama-cpp-python`/llama.cpp; Ollama is not used. Desktop builds include the CPU runtime. For a source install, add it with `python -m pip install -r backend/requirements-local.txt` (or install `backend/requirements-desktop.txt` for a desktop build).
+
+Qwen is a text model: it can generate scripts, scenes, SEO metadata, and thumbnail copy, but it does not create images or speech. Visuals continue to use Pexels/Pixabay and the designed fallback; narration still uses hosted Edge TTS and needs internet. Stock search, YouTube publishing, and other non-text services are not replaced by Qwen.
 
 ## YouTube OAuth setup
 
@@ -42,15 +44,16 @@ CreatorFlow no longer depends on Ollama, SDXL/Diffusers, Chatterbox, or an offli
 ## Requirements
 
 - Python 3.11 and FFmpeg for running from source.
-- An OpenRouter or GroqCloud API key and a selected model for the chosen text provider.
-- Internet access for the selected text provider, hosted Edge TTS, and stock-media providers.
+- An OpenRouter or GroqCloud API key for hosted text generation, or the downloaded Qwen GGUF plus llama.cpp runtime for local text generation/fallback.
+- Internet access for hosted text/Edge TTS/stock services and to download the optional local model.
 - Pexels and/or Pixabay API keys for stock photos and clips (optional).
 - Google OAuth JSON for YouTube uploads (optional).
 
 ## Troubleshooting
 
 - **Text model list does not load:** check the app host's internet connection and the selected provider's model-catalog access. OpenRouter lists free text models; Groq discovery requires a valid GroqCloud API key.
-- **Script generation fails:** check that the selected provider, model, and matching API key are set in Settings, and that the provider account has sufficient quota.
+- **Script generation fails:** check that the selected provider/model is set in Settings and that its API key/account quota is valid. For automatic fallback, download Qwen3 in Settings and use a desktop build with the llama.cpp CPU runtime installed.
+- **Local Qwen unavailable:** check the model download status in Settings. If the GGUF is present but inference cannot start, reinstall/build with `backend/requirements-desktop.txt`; the model download and llama.cpp runtime are separate.
 - **No voiceover:** Edge TTS is hosted and requires internet access. Check the selected voice and retry; the app will not use a local voice model.
 - **No stock visuals:** add a valid Pexels or Pixabay key in Settings; a designed gradient fallback is used when stock is unavailable.
 - **MP4 export says MoviePy/FFmpeg is required:** set FFmpeg executable to `ffmpeg-imageio` (default) or its full path. For source installs, reinstall `moviepy==1.0.3` and `imageio-ffmpeg` in the backend environment.
